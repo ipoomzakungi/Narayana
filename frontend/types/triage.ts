@@ -1,0 +1,59 @@
+export type ProviderMode = "mock" | "azure_speech_openai" | "azure_voice_live";
+export type IncidentType = "flood" | "fire" | "medical" | "accident" | "earthquake" | "public_safety" | "unknown";
+export type TriageLevel = "RED" | "YELLOW" | "GREEN";
+export type CaseStatus = "pending" | "contacted" | "dispatched" | "resolved" | "closed";
+export type VadState = "silence" | "speech" | "listening" | "thinking" | "speaking";
+
+export interface TriageResult {
+  case_id: string;
+  language: string;
+  incident_type: IncidentType;
+  triage_level: TriageLevel;
+  confidence: number;
+  location_text: string;
+  people_affected: number | null;
+  injuries: string;
+  immediate_needs: string[];
+  caller_phone_optional: string | null;
+  ai_summary: string;
+  triage_reason: string;
+  human_review_required: boolean;
+  missing_fields: string[];
+  created_at: string;
+  updated_at: string;
+  status: CaseStatus;
+}
+
+export interface CaseRepositoryRecord {
+  case: TriageResult;
+  session_id: string | null;
+  source_provider: ProviderMode;
+  debug_event_count: number;
+  stored_at: string;
+}
+
+export interface AudioDebugEvent {
+  event_id: string;
+  session_id: string;
+  case_id?: string | null;
+  event_type: string;
+  state?: VadState | null;
+  timestamp: string;
+  duration_ms?: number | null;
+  metadata: Record<string, unknown>;
+}
+
+export type VoiceWsMessage =
+  | { type: "session.started"; session_id: string; provider_mode: ProviderMode; state: VadState }
+  | { type: "debug.event"; event: AudioDebugEvent }
+  | {
+      type: "triage.case.created";
+      session_id: string;
+      transcript: string;
+      provider_mode: ProviderMode;
+      response_text: string | null;
+      warnings: string[];
+      record: CaseRepositoryRecord;
+    }
+  | { type: "error"; detail: string }
+  | { type: "session.closed"; session_id: string };

@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import os
+from functools import lru_cache
+
+
+def _truthy(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+@dataclass(frozen=True)
+class Settings:
+    azure_speech_key: str = ""
+    azure_speech_region: str = ""
+    azure_openai_endpoint: str = ""
+    azure_openai_api_key: str = ""
+    azure_openai_deployment: str = ""
+    azure_openai_api_version: str = ""
+    azure_voice_live_endpoint: str = ""
+    azure_voice_live_model: str = ""
+    cosmos_db_endpoint: str = ""
+    cosmos_db_key: str = ""
+    cosmos_db_database: str = ""
+    cosmos_db_container: str = ""
+    use_mock_services: bool = True
+    case_store_path: str = ".data/cases.json"
+    low_confidence_threshold: float = 0.75
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        return cls(
+            azure_speech_key=os.getenv("AZURE_SPEECH_KEY", ""),
+            azure_speech_region=os.getenv("AZURE_SPEECH_REGION", ""),
+            azure_openai_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", ""),
+            azure_openai_api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
+            azure_openai_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT", ""),
+            azure_openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION", ""),
+            azure_voice_live_endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT", ""),
+            azure_voice_live_model=os.getenv("AZURE_VOICE_LIVE_MODEL", ""),
+            cosmos_db_endpoint=os.getenv("COSMOS_DB_ENDPOINT", ""),
+            cosmos_db_key=os.getenv("COSMOS_DB_KEY", ""),
+            cosmos_db_database=os.getenv("COSMOS_DB_DATABASE", ""),
+            cosmos_db_container=os.getenv("COSMOS_DB_CONTAINER", ""),
+            use_mock_services=_truthy(os.getenv("USE_MOCK_SERVICES"), default=True),
+            case_store_path=os.getenv("CASE_STORE_PATH", ".data/cases.json"),
+            low_confidence_threshold=float(os.getenv("LOW_CONFIDENCE_THRESHOLD", "0.75")),
+        )
+
+    @property
+    def azure_speech_configured(self) -> bool:
+        return bool(self.azure_speech_key and self.azure_speech_region)
+
+    @property
+    def azure_openai_configured(self) -> bool:
+        return bool(
+            self.azure_openai_endpoint
+            and self.azure_openai_api_key
+            and self.azure_openai_deployment
+            and self.azure_openai_api_version
+        )
+
+    @property
+    def azure_speech_openai_configured(self) -> bool:
+        return self.azure_speech_configured and self.azure_openai_configured
+
+    @property
+    def azure_voice_live_configured(self) -> bool:
+        return bool(self.azure_voice_live_endpoint and self.azure_voice_live_model)
+
+    @property
+    def cosmos_configured(self) -> bool:
+        return bool(
+            self.cosmos_db_endpoint
+            and self.cosmos_db_key
+            and self.cosmos_db_database
+            and self.cosmos_db_container
+        )
+
+    @property
+    def selected_provider(self) -> str:
+        if self.use_mock_services:
+            return "mock"
+        if self.azure_speech_openai_configured:
+            return "azure_speech_openai"
+        if self.azure_voice_live_configured:
+            return "azure_voice_live"
+        return "mock"
+
+    def missing_azure_variables(self) -> list[str]:
+        checks = {
+            "AZURE_SPEECH_KEY": self.azure_speech_key,
+            "AZURE_SPEECH_REGION": self.azure_speech_region,
+            "AZURE_OPENAI_ENDPOINT": self.azure_openai_endpoint,
+            "AZURE_OPENAI_API_KEY": self.azure_openai_api_key,
+            "AZURE_OPENAI_DEPLOYMENT": self.azure_openai_deployment,
+            "AZURE_OPENAI_API_VERSION": self.azure_openai_api_version,
+        }
+        return [name for name, value in checks.items() if not value]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings.from_env()
+
+
+def reset_settings_cache() -> None:
+    get_settings.cache_clear()
