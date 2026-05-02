@@ -22,7 +22,9 @@ class AzureVoiceLiveProvider:
     async def process_turn(self, turn: CallerTurn) -> VoiceProviderResult:
         # This provider is optional for V0. The production stream mapping belongs here.
         transcript = "น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง"
-        return await self.process_transcript(TranscriptInput(transcript=transcript, language_hint="th"))
+        result = await self.process_transcript(TranscriptInput(transcript=transcript, language_hint="th"))
+        result.audio_ref = turn.audio_ref
+        return result
 
     async def process_transcript(self, transcript_input: TranscriptInput) -> VoiceProviderResult:
         triage = await self.triage_provider.triage_transcript(
@@ -32,6 +34,7 @@ class AzureVoiceLiveProvider:
         return VoiceProviderResult(
             provider_mode=self.mode,
             transcript=transcript_input.transcript,
+            transcript_source="fallback",
             language=triage.language,
             confidence=triage.confidence,
             triage=triage,

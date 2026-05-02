@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Literal, Protocol
 
 from app.core.config import Settings
 from app.models.audio import CallerTurn
 from app.models.triage import ProviderMode, TriageResult
+
+
+TranscriptSource = Literal["mock", "azure_speech_stt", "fallback"]
 
 
 @dataclass
@@ -26,9 +29,11 @@ class TranscriptInput:
 class VoiceProviderResult:
     provider_mode: ProviderMode
     transcript: str
+    transcript_source: TranscriptSource
     language: str
     confidence: float
     triage: TriageResult
+    audio_ref: str | None = None
     response_text: str | None = None
     provider_warnings: list[str] = field(default_factory=list)
 
@@ -54,7 +59,7 @@ def get_voice_provider(settings: Settings, requested_mode: ProviderMode | None =
     if requested_mode == ProviderMode.AZURE_VOICE_LIVE and settings.azure_voice_live_configured:
         return AzureVoiceLiveProvider(settings)
 
-    if requested_mode == ProviderMode.AZURE_SPEECH_OPENAI and settings.azure_speech_openai_configured:
+    if requested_mode == ProviderMode.AZURE_SPEECH_OPENAI:
         return AzureSpeechOpenAIProvider(settings)
 
     if settings.use_mock_services:

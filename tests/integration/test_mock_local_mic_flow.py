@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
+import wave
 
 from fastapi.testclient import TestClient
 
@@ -33,7 +35,11 @@ def test_mock_local_mic_flow_creates_case(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         routes_audio,
         "get_settings",
-        lambda: Settings(use_mock_services=True, case_store_path=str(tmp_path / "cases.json")),
+        lambda: Settings(
+            use_mock_services=True,
+            case_store_path=str(tmp_path / "cases.json"),
+            audio_store_path=str(tmp_path / "audio"),
+        ),
     )
     app = create_app()
     client = TestClient(app)
@@ -59,6 +65,11 @@ def test_mock_local_mic_flow_creates_case(tmp_path, monkeypatch) -> None:
         if message["type"] == "debug.event"
     ]
     case_messages = [message for message in messages if message["type"] == "triage.case.created"]
+    turn_events = [
+        message["event"]
+        for message in messages
+        if message["type"] == "debug.event" and message["event"]["event_type"] == "turn.committed"
+    ]
 
     assert "audio.frame.received" in event_types
     assert "vad.speech.start" in event_types
@@ -66,4 +77,20 @@ def test_mock_local_mic_flow_creates_case(tmp_path, monkeypatch) -> None:
     assert "turn.committed" in event_types
     assert "ai.request.started" in event_types
     assert case_messages
-    assert case_messages[0]["record"]["case"]["triage_level"] == "RED"
+    case_message = case_messages[0]
+    assert case_message["provider_mode"] == "mock"
+    assert case_message["transcript_source"] == "mock"
+    assert case_message["warnings"] == []
+    assert case_message["transcript"]
+    assert case_message["record"]["case"]["triage_level"] == "RED"
+    assert case_message["audio_ref"]
+    assert Path(case_message["audio_ref"]).exists()
+    assert turn_events
+    assert turn_events[0]["metadata"]["audio_ref"] == case_message["audio_ref"]
+    assert turn_events[0]["metadata"]["audio_debug_id"]
+
+    with wave.open(case_message["audio_ref"], "rb") as wav_file:
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getsampwidth() == 2
+        assert wav_file.getframerate() == 16000
+        assert wav_file.getnframes() > 0

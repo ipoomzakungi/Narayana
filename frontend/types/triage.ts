@@ -3,6 +3,7 @@ export type IncidentType = "flood" | "fire" | "medical" | "accident" | "earthqua
 export type TriageLevel = "RED" | "YELLOW" | "GREEN";
 export type CaseStatus = "pending" | "contacted" | "dispatched" | "resolved" | "closed";
 export type VadState = "silence" | "speech" | "listening" | "thinking" | "speaking";
+export type TranscriptSource = "mock" | "azure_speech_stt" | "fallback";
 
 export interface TriageResult {
   case_id: string;
@@ -51,6 +52,8 @@ export type VoiceWsMessage =
       session_id: string;
       transcript: string;
       provider_mode: ProviderMode;
+      transcript_source: TranscriptSource;
+      audio_ref: string | null;
       response_text: string | null;
       warnings: string[];
       record: CaseRepositoryRecord;

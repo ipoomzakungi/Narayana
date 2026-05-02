@@ -5,7 +5,7 @@ import React, { useRef, useState } from "react";
 import { startMicStreaming } from "@/lib/audio-client";
 import { createCase, triageFromTranscript } from "@/lib/triage-api-client";
 import { createVoiceWsClient, type VoiceWsClient } from "@/lib/voice-ws-client";
-import type { AudioDebugEvent, CaseRepositoryRecord, TriageResult, VadState, VoiceWsMessage } from "@/types/triage";
+import type { AudioDebugEvent, CaseRepositoryRecord, TranscriptSource, TriageResult, VadState, VoiceWsMessage } from "@/types/triage";
 
 const SAMPLE_TRANSCRIPT = "น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง";
 
@@ -31,6 +31,9 @@ export function VoiceDebugConsole() {
   const [events, setEvents] = useState<AudioDebugEvent[]>([]);
   const [vadState, setVadState] = useState<VadState>("listening");
   const [providerMode, setProviderMode] = useState("mock");
+  const [transcriptSource, setTranscriptSource] = useState<TranscriptSource | "manual">("manual");
+  const [audioRef, setAudioRef] = useState<string | null>(null);
+  const [providerWarnings, setProviderWarnings] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +48,10 @@ export function VoiceDebugConsole() {
       setTriage(triageResult);
       const record = await createCase(triageResult, "mock");
       setCaseRecord(record);
+      setProviderMode("mock");
+      setTranscriptSource("manual");
+      setAudioRef(null);
+      setProviderWarnings([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create case");
     } finally {
@@ -68,6 +75,9 @@ export function VoiceDebugConsole() {
       setTriage(message.record.case);
       setCaseRecord(message.record);
       setProviderMode(message.provider_mode);
+      setTranscriptSource(message.transcript_source);
+      setAudioRef(message.audio_ref);
+      setProviderWarnings(message.warnings);
       setVadState("listening");
       return;
     }
@@ -79,6 +89,8 @@ export function VoiceDebugConsole() {
   async function startRecording() {
     setError(null);
     setEvents([]);
+    setProviderWarnings([]);
+    setAudioRef(null);
     const sessionId = `session_${Date.now()}`;
     const client = createVoiceWsClient({
       sessionId,
@@ -145,6 +157,20 @@ export function VoiceDebugConsole() {
               <span className="text-sm font-semibold">Local Mic</span>
               <span className="text-xs text-slate-600">{providerMode}</span>
             </div>
+            <dl className="mt-3 grid gap-2 text-xs text-slate-700">
+              <div className="grid grid-cols-[110px_1fr] gap-2">
+                <dt className="text-slate-500">Source</dt>
+                <dd className="font-medium">{providerMode}</dd>
+              </div>
+              <div className="grid grid-cols-[110px_1fr] gap-2">
+                <dt className="text-slate-500">Transcript</dt>
+                <dd className="font-medium">{transcriptSource}</dd>
+              </div>
+              <div className="grid grid-cols-[110px_1fr] gap-2">
+                <dt className="text-slate-500">Audio Ref</dt>
+                <dd className="break-all font-medium">{audioRef ?? "-"}</dd>
+              </div>
+            </dl>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <button
                 className="border border-emerald-700 bg-emerald-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
@@ -166,6 +192,16 @@ export function VoiceDebugConsole() {
           </div>
 
           {error ? <div className="mt-4 border border-red-300 bg-red-50 p-3 text-sm text-red-800">{error}</div> : null}
+          {providerWarnings.length > 0 ? (
+            <div className="mt-4 border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <h2 className="text-sm font-semibold">Provider Warnings</h2>
+              <ul className="mt-2 space-y-1">
+                {providerWarnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </section>
 
         <section className="grid gap-4 lg:grid-cols-2">
@@ -190,6 +226,14 @@ export function VoiceDebugConsole() {
               <div>
                 <dt className="text-slate-500">Confidence</dt>
                 <dd className="font-medium">{triage ? `${Math.round(triage.confidence * 100)}%` : "-"}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Transcript Source</dt>
+                <dd className="font-medium">{transcriptSource}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Provider</dt>
+                <dd className="font-medium">{providerMode}</dd>
               </div>
               <div className="col-span-2">
                 <dt className="text-slate-500">Location</dt>

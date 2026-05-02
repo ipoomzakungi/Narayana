@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
 For Narayana AI implementation context, read the current plan:
 
-- `specs/001-crisis-voice-triage/plan.md`
+- `specs/002-azure-speech-validation/plan.md`
 <!-- SPECKIT END -->

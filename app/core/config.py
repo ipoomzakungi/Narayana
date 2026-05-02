@@ -27,6 +27,7 @@ class Settings:
     cosmos_db_container: str = ""
     use_mock_services: bool = True
     case_store_path: str = ".data/cases.json"
+    audio_store_path: str = ".data/audio"
     low_confidence_threshold: float = 0.75
 
     @classmethod
@@ -46,6 +47,7 @@ class Settings:
             cosmos_db_container=os.getenv("COSMOS_DB_CONTAINER", ""),
             use_mock_services=_truthy(os.getenv("USE_MOCK_SERVICES"), default=True),
             case_store_path=os.getenv("CASE_STORE_PATH", ".data/cases.json"),
+            audio_store_path=os.getenv("AUDIO_STORE_PATH", ".data/audio"),
             low_confidence_threshold=float(os.getenv("LOW_CONFIDENCE_THRESHOLD", "0.75")),
         )
 

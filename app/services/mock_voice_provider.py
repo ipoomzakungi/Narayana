@@ -18,7 +18,9 @@ class MockVoiceProvider:
         return ProviderHealth(mode=self.mode, configured=True, warnings=self._warnings)
 
     async def process_turn(self, turn: CallerTurn) -> VoiceProviderResult:
-        return await self.process_transcript(TranscriptInput(transcript=THAI_SAMPLE, language_hint="th"))
+        result = await self.process_transcript(TranscriptInput(transcript=THAI_SAMPLE, language_hint="th"))
+        result.audio_ref = turn.audio_ref
+        return result
 
     async def process_transcript(self, transcript_input: TranscriptInput) -> VoiceProviderResult:
         transcript = transcript_input.transcript.strip()
@@ -76,6 +78,7 @@ class MockVoiceProvider:
         return VoiceProviderResult(
             provider_mode=self.mode,
             transcript=transcript,
+            transcript_source="mock",
             language=triage.language,
             confidence=triage.confidence,
             triage=triage,

@@ -9,6 +9,7 @@ from app.core.config import Settings, get_settings
 from app.models.audio import AudioDebugEvent, AudioDebugEventType, AudioFrame, VadState
 from app.models.case import CrisisCase
 from app.models.triage import AzureHealth, ProviderMode
+from app.services.audio_buffer_service import AudioBufferError, AudioBufferService
 from app.services.audio_frame_service import AudioFrameError
 from app.services.case_repository import get_case_repository
 from app.services.safety_rules import apply_safety_rules
@@ -58,6 +59,7 @@ async def local_audio_ws(websocket: WebSocket) -> None:
     session_id = f"session_{uuid4().hex[:12]}"
     requested_mode: ProviderMode | None = None
     manager = TurnManager()
+    audio_buffer = AudioBufferService(settings.audio_store_path)
     debug_events: list[AudioDebugEvent] = []
 
     try:
@@ -117,9 +119,34 @@ async def local_audio_ws(websocket: WebSocket) -> None:
             try:
                 frame = AudioFrame.model_validate({**raw, "session_id": raw.get("session_id") or session_id})
                 result = manager.process_frame(frame)
-            except (ValidationError, AudioFrameError, ValueError) as exc:
+                speech_started = any(
+                    event.event_type == AudioDebugEventType.VAD_SPEECH_START for event in result.events
+                )
+                audio_buffer.observe_frame(frame, speech_started=speech_started)
+            except (ValidationError, AudioFrameError, AudioBufferError, ValueError) as exc:
                 await websocket.send_json({"type": "error", "detail": str(exc)})
                 continue
+
+            audio_warnings: list[str] = []
+            if result.committed_turn is not None:
+                try:
+                    audio_result = audio_buffer.write_committed_turn(result.committed_turn)
+                    result.committed_turn.audio_ref = audio_result.audio_ref
+                    result.committed_turn.audio_debug_id = audio_result.audio_debug_id
+                    for event in result.events:
+                        if event.event_type == AudioDebugEventType.TURN_COMMITTED:
+                            event.metadata.update(
+                                {
+                                    "audio_ref": audio_result.audio_ref,
+                                    "audio_debug_id": audio_result.audio_debug_id,
+                                    "audio_frame_count": audio_result.frame_count,
+                                }
+                            )
+                except AudioBufferError as exc:
+                    audio_warnings.append(f"Audio turn could not be saved: {exc}")
+                    for event in result.events:
+                        if event.event_type == AudioDebugEventType.TURN_COMMITTED:
+                            event.metadata["audio_error"] = str(exc)
 
             debug_events.extend(result.events)
             for event in result.events:
@@ -155,8 +182,10 @@ async def local_audio_ws(websocket: WebSocket) -> None:
                     "session_id": session_id,
                     "transcript": provider_result.transcript,
                     "provider_mode": provider_result.provider_mode.value,
+                    "transcript_source": provider_result.transcript_source,
+                    "audio_ref": provider_result.audio_ref or result.committed_turn.audio_ref,
                     "response_text": provider_result.response_text,
-                    "warnings": provider_result.provider_warnings,
+                    "warnings": [*audio_warnings, *provider_result.provider_warnings],
                     "record": record.model_dump(mode="json"),
                 }
             )
