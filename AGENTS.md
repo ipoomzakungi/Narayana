@@ -1,4 +1,5 @@
 <!-- SPECKIT START -->
-For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current plan
+For Narayana AI implementation context, read the current plan:
+
+- `specs/001-crisis-voice-triage/plan.md`
 <!-- SPECKIT END -->
