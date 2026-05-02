@@ -223,6 +223,132 @@ Offline validation does not require Twilio credentials:
 pytest tests/unit/test_twilio_audio_service.py tests/unit/test_twilio_routes.py tests/integration/test_twilio_media_flow.py
 ```
 
+## Azure Container Apps Backend Deployment
+
+Twilio Media Streams must connect to the FastAPI backend because the backend owns `/api/telephony/twilio/incoming-call` and `/ws/telephony/twilio/{call_id}`. Vercel is frontend-only for this project; do not use a frontend-only deployment as the Narayana Twilio webhook target.
+
+The backend container runs:
+
+```text
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Build locally:
+
+```powershell
+docker build -t narayana-backend:local .
+```
+
+Run locally in mock Twilio mode:
+
+```powershell
+docker run --rm -p 8000:8000 `
+  -e USE_MOCK_SERVICES=true `
+  -e VOICE_INPUT_MODE=twilio_call `
+  -e TELEPHONY_PROVIDER=twilio `
+  -e TWILIO_PHONE_NUMBER=+16082005400 `
+  -e TWILIO_WEBHOOK_PUBLIC_BASE_URL=http://localhost:8000 `
+  narayana-backend:local
+```
+
+Deployment variables:
+
+```powershell
+$env:AZURE_RESOURCE_GROUP="rg-narayana-demo"
+$env:AZURE_LOCATION="southeastasia"
+$env:AZURE_CONTAINER_APP_NAME="narayana-api"
+$env:AZURE_CONTAINER_ENV_NAME="narayana-env"
+$env:AZURE_REGISTRY_NAME="narayanaregistry"
+$env:AZURE_IMAGE_NAME="narayana-backend:latest"
+$env:USE_MOCK_SERVICES="true"
+$env:VOICE_INPUT_MODE="twilio_call"
+$env:TELEPHONY_PROVIDER="twilio"
+$env:TWILIO_PHONE_NUMBER="+16082005400"
+$env:TWILIO_WEBHOOK_PUBLIC_BASE_URL="https://<container-app-url>"
+```
+
+Deploy or print fallback commands:
+
+```powershell
+.\scripts\azure_container_apps_deploy.ps1
+```
+
+The script validates required values, prefers `az containerapp up` when available, and otherwise prints `az acr build` / `az containerapp create` fallback commands. Secrets stay outside the image; `.env`, `.env.*`, and `.data/` are excluded by `.dockerignore`.
+
+After deployment, set:
+
+```powershell
+$env:AZURE_CONTAINER_APP_URL="https://<container-app-url>"
+$env:TWILIO_WEBHOOK_PUBLIC_BASE_URL="https://<container-app-url>"
+```
+
+## Public Webhook Check
+
+Run a fake Twilio webhook check before using real calls:
+
+```powershell
+python scripts/check_public_webhook.py
+```
+
+The checker:
+
+- reads `TWILIO_WEBHOOK_PUBLIC_BASE_URL`, falling back to `AZURE_CONTAINER_APP_URL`
+- calls `GET /api/health/azure`
+- posts fake `CallSid=CA_TEST` to `/api/telephony/twilio/incoming-call`
+- verifies TwiML includes `/ws/telephony/twilio/CA_TEST`
+- never calls Twilio or Azure management APIs
+
+## Twilio Number Configuration
+
+For the Twilio US voice number `+16082005400`, configure the voice webhook in Twilio:
+
+```text
+POST https://<container-app-url>/api/telephony/twilio/incoming-call
+```
+
+Inbound call test:
+
+1. Deploy the backend to Azure Container Apps in mock mode.
+2. Run `python scripts/check_public_webhook.py`.
+3. Call `+16082005400`.
+4. Watch Container Apps logs for the Twilio media WebSocket session.
+5. Confirm the dashboard/debug output still shows mock-provider triage until Azure credentials are intentionally enabled.
+
+## Twilio Outbound Call Helper
+
+The outbound helper is optional and credential-gated. It creates a Twilio voice call from `+16082005400` to a verified destination and uses the Narayana webhook URL for call handling.
+
+Set:
+
+```powershell
+$env:TWILIO_ACCOUNT_SID="AC..."
+$env:TWILIO_AUTH_TOKEN="..."
+$env:TWILIO_PHONE_NUMBER="+16082005400"
+$env:TWILIO_OUTBOUND_TO="+66..."
+$env:TWILIO_WEBHOOK_PUBLIC_BASE_URL="https://<container-app-url>"
+```
+
+Run:
+
+```powershell
+python scripts/twilio_outbound_call.py
+```
+
+For an outbound call to a verified Thai phone:
+
+- Add the Thai phone as a verified caller ID if the Twilio account is in trial mode.
+- Enable Thailand in Twilio Voice Geo Permissions.
+- Confirm account balance, destination format, and expected call cost.
+- Keep this as a controlled manual test; automated tests do not call Twilio.
+
+## Deployment and Call-Test Limits
+
+- Vercel is frontend-only; Twilio webhook and media stream traffic must target the Azure Container Apps backend.
+- No ACS production implementation is included.
+- No SMS is sent.
+- No emergency dispatch is implemented.
+- Real-call tests validate telephony ingress only and do not prove official emergency-service readiness.
+
 ## ACS Skeleton
 
 ACS routes are present only as disabled placeholders:
