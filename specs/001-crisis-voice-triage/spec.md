@@ -1,151 +1,143 @@
-# Feature Specification: Narayana AI Voice Intake
+# Feature Specification: Narayana AI Azure Voice Gateway
 
 **Feature Branch**: `001-crisis-voice-triage`  
 **Created**: 2026-05-02  
-**Status**: Draft  
-**Input**: User description: "Build Narayana AI, a local-first AI crisis voice intake and triage prototype for a Microsoft Azure-focused hackathon."
+**Status**: Revised  
+**Input**: User description: "Create an optimized Azure Voice Gateway module for the AI Crisis Management hackathon project."
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Capture Thai Crisis Intake by Voice (Priority: P1)
+### User Story 1 - Validate Local Voice Intake Pipeline (Priority: P1)
 
-A caller speaks naturally in Thai through a local microphone. The assistant listens for complete turns, asks short crisis-intake questions, confirms critical details, and creates a structured crisis case for operator review.
+As a hackathon developer, I want to test crisis voice intake from my local microphone so that I can validate turn detection, speech processing, structured triage extraction, safety rules, and case creation before integrating a real phone provider.
 
-**Why this priority**: This is the core demo value: an overwhelmed crisis team can convert a stressful spoken call into structured, reviewable information without requiring the caller to install an app or use a real phone integration.
+**Why this priority**: This proves the core voice-AI pipeline without blocking on Twilio, Azure Communication Services phone-number availability, Thailand number support, or trial-account restrictions.
 
-**Independent Test**: Can be tested with only a local microphone session by speaking a Thai crisis scenario and verifying that a structured case is created with transcript, extracted fields, triage level, confidence, summary, and human-review flag.
+**Independent Test**: Start a local microphone intake session, speak the Thai flood scenario, and verify that the module returns a structured crisis case with RED triage and human review required.
 
 **Acceptance Scenarios**:
 
-1. **Given** a new local microphone intake session, **When** the caller says "น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง", **Then** the system records Thai as the language, extracts flood and urgent medical risk, creates a case, assigns RED priority, and marks human review required.
-2. **Given** the caller has not provided a location, number of people, injury status, or immediate danger, **When** the assistant needs more information, **Then** it asks one short crisis-intake question at a time and confirms the critical field before relying on it.
-3. **Given** the assistant is speaking guidance, **When** the caller starts speaking again, **Then** the assistant supports interruption, stops or yields its speech, and captures the caller's new turn without losing the case context.
+1. **Given** a local microphone voice session is active, **When** the caller says "น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง", **Then** the module returns a case object with language `th`, incident type `flood`, triage level `RED`, location text containing Hat Yai or หาดใหญ่, injuries describing elderly breathing difficulty, immediate needs including rescue and medical help, human review required, status `pending`, and a triage reason explaining trapped person plus breathing difficulty.
+2. **Given** cloud speech credentials are unavailable, **When** the developer runs the same local microphone scenario, **Then** the module uses a mock provider and still returns a valid structured case for demo validation.
+3. **Given** cloud speech credentials are available, **When** the developer runs the same local microphone scenario, **Then** the module can use the configured Azure provider while preserving the same case JSON contract and safety rules.
 
 ---
 
-### User Story 2 - Review Prioritized Cases on a Live Dashboard (Priority: P2)
+### User Story 2 - Observe VAD, Turn Detection, and Barge-In (Priority: P1)
 
-A crisis operator sees newly created cases appear on a live dashboard, opens the details, understands why the case was prioritized, and updates the case status as human response progresses.
+As a hackathon developer, I want visible voice gateway state and timing logs so that I can debug whether the system listens, waits, thinks, speaks, and yields correctly during a noisy or interrupted crisis conversation.
 
-**Why this priority**: Operators need a practical work queue that highlights urgent cases first and keeps the human in charge of review, override, and response status.
+**Why this priority**: The demo depends on proving that the assistant does not respond while the caller is still speaking and can flag interruption when caller speech overlaps assistant output.
 
-**Independent Test**: Can be tested by creating or simulating cases at each priority level and verifying that the dashboard updates without manual refresh, orders cases by urgency, and exposes all case details needed for review.
+**Independent Test**: Use a local microphone session with speech, silence, a long pause, and an interruption while assistant speech is marked active; verify state transitions and timing events.
 
 **Acceptance Scenarios**:
 
-1. **Given** one RED, one YELLOW, and one GREEN case exist, **When** the operator views the dashboard, **Then** cases are shown without manual refresh and RED cases are visually prioritized ahead of lower-priority cases.
-2. **Given** an operator opens a case, **When** the case detail view loads, **Then** the operator can see the transcript, AI summary, extracted facts, confidence, triage reason, current status, timestamps, and whether human review is required.
-3. **Given** the operator determines that the triage level or status needs correction, **When** they override priority or update status, **Then** the case reflects the new value, preserves the AI-assigned reason, and records the updated time.
+1. **Given** a voice session is receiving audio, **When** the caller is silent, speaking, waiting for response, the module is processing, or assistant output is active, **Then** the gateway exposes one of these states: silence, speech, listening, thinking, speaking.
+2. **Given** a caller finishes speaking, **When** the configured silence threshold is reached, **Then** the gateway closes the user turn and sends only the completed user turn for speech/AI processing.
+3. **Given** assistant output is active, **When** caller speech is detected, **Then** the gateway marks a barge-in event and starts a new caller turn without treating the assistant output as emergency evidence.
 
 ---
 
-### User Story 3 - Keep Triage Safe and Human-Centered (Priority: P2)
+### User Story 3 - Enforce Crisis Safety Rules After AI Output (Priority: P1)
 
-The assistant gives only safe scripted crisis guidance, never claims to replace emergency responders, never dispatches rescue automatically, and always escalates high-risk or uncertain cases for human review.
+As a hackathon developer, I want deterministic safety rules applied after AI extraction so that crisis triage is explainable, conservative, and never relies only on model judgment.
 
-**Why this priority**: Crisis intake can affect life safety. The prototype must demonstrate clear guardrails before it can be credible to operators, coordinators, or public-service teams.
+**Why this priority**: Crisis triage can affect human response. The module must not dispatch, close, reject, or downgrade emergency cases without human review.
 
-**Independent Test**: Can be tested with scripted RED, YELLOW, GREEN, ambiguous, and low-confidence scenarios to verify that the system explains triage, requires review when appropriate, and avoids unsafe claims.
+**Independent Test**: Run sample transcripts for breathing difficulty, trapped person, severe bleeding, unconsciousness, drowning risk, active fire danger, missing location, low confidence, and contradictory facts; verify the safety overlay result.
 
 **Acceptance Scenarios**:
 
-1. **Given** a case includes life-threatening danger, severe medical symptoms, trapped people, fire danger, severe bleeding, or drowning risk, **When** triage is assigned, **Then** the case is RED and human review is required.
-2. **Given** a case has low confidence or conflicting crisis facts, **When** the case is created or updated, **Then** it requires human review and is not downgraded without operator action.
-3. **Given** the assistant gives waiting guidance, **When** guidance is shown or spoken, **Then** it uses predefined safe scripts and clearly frames the product as a crisis intake and triage assistant, not an official emergency hotline replacement.
+1. **Given** AI extraction reports breathing difficulty, trapped person, severe bleeding, unconsciousness, drowning risk, or active fire danger, **When** deterministic safety rules run, **Then** triage is forced to RED and human review is required.
+2. **Given** AI extraction has low confidence, missing location, or contradictory facts, **When** deterministic safety rules run, **Then** human review is required and the case is not downgraded automatically.
+3. **Given** the module generates guidance, **When** the guidance is returned, **Then** it is short, safe, and frames Narayana AI as an intake and triage assistant, not an official emergency hotline replacement.
 
 ---
 
-### User Story 4 - Observe Turn Detection and Audio Timing (Priority: P3)
+### User Story 4 - Keep Phone Providers as Future Adapters (Priority: P2)
 
-A developer or demo operator can observe the audio interaction state and timing logs while testing noisy or interrupted local microphone conversations.
+As a hackathon developer, I want clean adapter interfaces for local microphone, uploaded audio, Twilio Media Streams, and Azure Communication Services so that V0 can demo locally while V1 phone integrations are validated separately.
 
-**Why this priority**: The prototype must prove it can avoid talking over callers and provide enough timing evidence to debug voice behavior during a live hackathon demo.
+**Why this priority**: The project needs a credible path to phone intake, but real phone number acquisition and provider restrictions must not block the hackathon MVP.
 
-**Independent Test**: Can be tested by speaking, pausing, staying silent, making noise, and interrupting assistant speech while verifying the debug state and timing log.
+**Independent Test**: Inspect adapter registration and runtime configuration to verify that local browser microphone is required for V0, uploaded audio is optional, and Twilio/ACS adapters exist only as disabled V1 interfaces.
 
 **Acceptance Scenarios**:
 
-1. **Given** the caller is silent, speaking, waiting for a response, the system is thinking, or the assistant is speaking, **When** the state changes, **Then** the debug UI shows one of: silence, speech, listening, thinking, or speaking.
-2. **Given** a local microphone session contains multiple caller and assistant turns, **When** the session is reviewed, **Then** each relevant audio and turn event has a timestamped timing log.
-3. **Given** background noise or partial speech occurs, **When** the system cannot confidently determine a complete caller turn, **Then** it avoids premature response and either waits, asks a clarifying question, or flags the case for human review.
+1. **Given** V0 runtime configuration, **When** input adapters are loaded, **Then** local browser microphone is available and Twilio/ACS adapters are not required.
+2. **Given** an uploaded audio sample is provided, **When** optional upload processing is enabled, **Then** the gateway processes it through the same turn, extraction, safety, and case-output contract as microphone input.
+3. **Given** a developer reviews future phone integration points, **When** they inspect the adapter interfaces, **Then** Twilio Media Stream and Azure Communication Services adapters are clearly marked V1 and not wired into the default V0 demo path.
 
 ### Edge Cases
 
-- Caller speech is noisy, panicked, very soft, elderly, or interrupted by background sounds.
-- Caller pauses mid-sentence long enough to look like a completed turn.
-- Caller changes or corrects critical facts after the assistant has summarized them.
-- Location is vague, ambiguous, misspelled, or only described by landmark.
-- Number of people affected or injury severity is unknown.
-- Caller uses mixed Thai and another language, or the language cannot be confidently detected.
-- Caller reports danger terms that imply RED priority but also says they are currently safe.
-- A case is RED or low-confidence while the operator has not yet opened the case.
-- The dashboard temporarily loses its live update connection.
-- A simulated SMS or upload-link action is used during the demo and must be clearly marked as simulated.
+- Caller speech is noisy, panicked, very quiet, clipped, or contains long pauses.
+- Caller interrupts assistant output while the system is in speaking state.
+- Caller gives no location, ambiguous location, or only a landmark.
+- AI output is malformed, incomplete, low-confidence, or contradicts previous extracted facts.
+- The caller reports a RED safety indicator but also says they are currently safe.
+- Azure credentials are missing, invalid, expired, or configured for a region without the desired voice capability.
+- Uploaded audio is too long, corrupt, unsupported, or contains no speech.
+- A future telephony adapter is present in code but should remain disabled in V0.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: The system MUST support a V0 intake flow that starts from a local microphone and does not require real phone numbers, Twilio call handling, or Azure Communication Services phone number setup.
-- **FR-002**: The system MUST support natural Thai voice intake and record the detected language for each case.
-- **FR-003**: The system MUST create a structured crisis case from caller conversation turns.
-- **FR-004**: The system MUST include local voice activity or turn detection before audio is submitted for crisis interpretation.
-- **FR-005**: The system MUST avoid responding while the caller is still speaking.
-- **FR-006**: The system MUST support barge-in behavior where caller speech can interrupt assistant speech.
-- **FR-007**: The system MUST show the current voice interaction state in a developer/debug UI using these states: silence, speech, listening, thinking, and speaking.
-- **FR-008**: The system MUST log timestamped audio, turn, state-change, and barge-in events for debugging.
-- **FR-009**: The assistant MUST ask short crisis-intake questions and prioritize missing critical fields: location, people affected, injuries, and immediate danger.
-- **FR-010**: The assistant MUST confirm critical fields before treating them as reliable facts.
-- **FR-011**: The assistant MUST provide safe scripted guidance while waiting for human review when guidance is appropriate.
-- **FR-012**: The assistant MUST NOT claim to replace emergency responders or official emergency hotlines.
-- **FR-013**: The assistant MUST NOT dispatch rescue automatically.
-- **FR-014**: The assistant MUST NOT deny emergency help or downgrade urgent help needs without human review.
-- **FR-015**: Each crisis case MUST include these fields: case_id, language, incident_type, triage_level, confidence, location_text, people_affected, injuries, immediate_needs, caller_phone_optional, ai_summary, triage_reason, human_review_required, created_at, updated_at, and status.
-- **FR-016**: The system MUST assign one of three triage levels: RED, YELLOW, or GREEN.
-- **FR-017**: RED triage MUST represent life-threatening danger, urgent medical danger, trapped person, breathing difficulty, severe bleeding, fire danger, or drowning risk.
-- **FR-018**: YELLOW triage MUST represent injured or at-risk situations that are not immediately life-threatening based on available information.
-- **FR-019**: GREEN triage MUST represent callers who appear safe and need information or non-urgent support.
-- **FR-020**: RED cases and low-confidence cases MUST require human review.
-- **FR-021**: The system MUST show the reason a triage priority was assigned.
-- **FR-022**: The live dashboard MUST show newly created or updated cases without requiring manual refresh.
-- **FR-023**: The dashboard MUST allow operators to open case details and view transcript, AI summary, extracted facts, confidence, triage reason, human-review requirement, timestamps, and current status.
-- **FR-024**: The dashboard MUST allow operators to override triage priority.
-- **FR-025**: The dashboard MUST allow operators to update status to contacted, dispatched, resolved, or closed.
-- **FR-026**: The system MUST preserve both the AI-assigned triage explanation and the current operator-selected priority when an override occurs.
-- **FR-027**: The V0 product MUST clearly describe itself as a crisis intake and triage assistant, not an official emergency hotline replacement.
-- **FR-028**: The demo MUST visibly satisfy the Microsoft Azure-focused hackathon requirement without making Azure Communication Services phone numbers or real telephony integrations part of V0 scope.
-- **FR-029**: If the demo includes a simulated SMS or upload-link action, the action MUST be labeled as simulated and MUST NOT imply real emergency dispatch.
+- **FR-001**: The module MUST support local browser microphone intake as the required V0 input mode.
+- **FR-002**: The module MUST NOT require Twilio, Azure Communication Services, real phone numbers, real SMS sending, or production call setup for V0.
+- **FR-003**: The module MUST expose adapter boundaries for local browser microphone, optional uploaded audio sample, Twilio Media Stream V1, and Azure Communication Services V1.
+- **FR-004**: V0 runtime MUST load the local microphone input path by default and MUST keep Twilio and Azure Communication Services adapters disabled unless explicitly enabled in a future version.
+- **FR-005**: Browser audio MUST be streamed to the backend through a live session connection suitable for incremental audio frames.
+- **FR-006**: The backend MUST expose voice gateway state as silence, speech, listening, thinking, or speaking.
+- **FR-007**: The backend MUST detect end-of-turn using local voice activity or turn detection plus a silence threshold.
+- **FR-008**: The backend MUST avoid sending incomplete caller speech turns for AI interpretation.
+- **FR-009**: The backend MUST support a barge-in flag when caller speech is detected while assistant output is active.
+- **FR-010**: The module MUST run with a mock AI provider when Azure credentials are missing.
+- **FR-011**: The module MUST run with Azure Speech speech-to-text plus Azure OpenAI structured triage extraction when credentials are available.
+- **FR-012**: The module SHOULD support Azure Voice Live when configured, without making it the only V0 voice path.
+- **FR-013**: The module MUST return structured crisis JSON for each completed crisis intake case.
+- **FR-014**: The structured case JSON MUST include language, incident_type, triage_level, location_text, people_affected, injuries, immediate_needs, human_review_required, triage_reason, extracted facts, confidence, and status.
+- **FR-015**: For the Thai flood scenario, the case JSON MUST output language `th`, incident_type `flood`, triage_level `RED`, location_text containing Hat Yai or หาดใหญ่, injuries describing elderly breathing difficulty, immediate_needs including rescue and medical help, human_review_required `true`, and status `pending`.
+- **FR-016**: The module MUST apply deterministic safety rules after AI output and before emitting or storing a case.
+- **FR-017**: Breathing difficulty, trapped person, severe bleeding, unconsciousness, drowning risk, or active fire danger MUST force RED triage and human review.
+- **FR-018**: RED, confidence below 0.75, missing-location, or contradictory cases MUST require human review.
+- **FR-019**: The module MUST NOT dispatch rescue automatically.
+- **FR-020**: The module MUST NOT close, reject, deny, or downgrade emergency cases without human review.
+- **FR-021**: AI-generated guidance MUST be short, safe, and must not claim official emergency hotline authority.
+- **FR-022**: Every AI decision MUST include extracted facts and an explainable reason.
+- **FR-023**: The module MUST store the case object through a repository when storage is configured or emit it through a dashboard integration event when storage is not configured.
+- **FR-024**: The module MUST support local development without production authentication or PDPA compliance implementation.
 
 ### Key Entities
 
-- **Crisis Case**: A structured emergency-intake record with case_id, language, incident_type, triage_level, confidence, location_text, people_affected, injuries, immediate_needs, caller_phone_optional, ai_summary, triage_reason, human_review_required, created_at, updated_at, and status.
-- **Conversation Transcript**: Ordered caller and assistant turns connected to a crisis case, including text, speaker, language indicator, turn timing, and confidence where available.
-- **Triage Assessment**: The priority decision for a case, including RED/YELLOW/GREEN level, confidence, triage reason, human-review requirement, and source facts used for the decision.
-- **Operator Update**: A human action on a case, including priority override, status change, update time, and optional operator note.
-- **Voice Timing Event**: A debug event for local microphone behavior, including event type, state, timestamp, duration where available, and related turn or case.
-- **Safe Guidance Script**: A predefined crisis guidance message selected by incident type or safety condition and constrained to avoid dispatch claims or official-hotline replacement claims.
-- **Simulated Outbound Action**: An optional demo-only SMS or upload-link simulation with target label, generated time, case association, and clear simulation status.
+- **Voice Gateway Session**: A local or future telephony intake session with input mode, current state, timing events, provider mode, and associated case output.
+- **Input Adapter**: A source-specific audio adapter for local browser microphone, optional uploaded audio sample, future Twilio Media Streams, or future Azure Communication Services.
+- **Caller Turn**: A completed user speech segment created by VAD/turn detection and used as the unit of speech/AI processing.
+- **VAD Timing Event**: A timestamped event for silence, speech, listening, thinking, speaking, end-of-turn, or barge-in behavior.
+- **Voice Provider Result**: A mock or Azure-derived result containing transcript, language, confidence, optional guidance, and structured crisis extraction.
+- **Crisis Case Object**: The emitted or stored case JSON with incident facts, triage, confidence, human-review requirement, reason, and status.
+- **Safety Assessment**: Deterministic post-AI evaluation that enforces RED conditions, review requirements, and no-dispatch/no-downgrade constraints.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: In a local microphone demo, a Thai crisis statement can produce a structured case on the dashboard within 30 seconds after the caller completes the relevant turn.
-- **SC-002**: The MVP demo phrase "น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง" results in a case that records Thai language, flood incident context, medical breathing risk, trapped-person context, RED priority, human review required, AI summary, and triage reason in 100% of prepared demo runs.
-- **SC-003**: Newly created or updated cases appear on the operator dashboard without manual refresh within 5 seconds for at least 95% of demo events.
-- **SC-004**: Operators can open a case, understand the priority reason, and update priority or status within 3 interactions from the case list.
-- **SC-005**: During voice testing, the debug UI displays the current state and records a timestamped event for every caller turn, assistant turn, state change, and barge-in event.
-- **SC-006**: 100% of RED cases and cases with confidence below the V0 low-confidence threshold are marked human_review_required and show an explanation before operator action.
-- **SC-007**: Across prepared RED, YELLOW, GREEN, ambiguous, and low-confidence test scripts, the assistant never states that rescue has been automatically dispatched and never denies or downgrades emergency help without human review.
-- **SC-008**: A first-time hackathon reviewer can identify within 60 seconds that the product is a Microsoft Azure-focused crisis intake and triage assistant and not an official emergency hotline replacement.
+- **SC-001**: A developer can create a structured crisis case from local microphone input in under 30 seconds after completing the Thai scenario turn.
+- **SC-002**: The Thai scenario "น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง" produces the required case JSON fields and RED triage in 100% of prepared demo runs with the mock provider.
+- **SC-003**: Voice gateway state is visible during local testing and records timing events for speech start, end-of-turn, thinking, speaking, and barge-in.
+- **SC-004**: Safety tests force RED for breathing difficulty, trapped person, severe bleeding, unconsciousness, drowning risk, and active fire danger.
+- **SC-005**: Low-confidence, missing-location, and contradictory cases require human review in 100% of prepared safety tests.
+- **SC-006**: The same case-output contract is used by mock provider mode and Azure provider mode.
+- **SC-007**: V0 can start and complete the local microphone demo with no Twilio, Azure Communication Services, phone number, real SMS, or official dispatch integration configured.
+- **SC-008**: Adapter interfaces for future Twilio and Azure Communication Services inputs are present and documented, while remaining disabled in the V0 runtime path.
 
 ## Assumptions
 
-- V0 is a local-first hackathon prototype tested from a local microphone before any real telephony channel is considered.
-- Real Twilio call handling, real Azure Communication Services phone numbers, real emergency dispatch integration, production authentication, full legal compliance implementation, and replacement of official emergency services are out of scope for V0.
-- Low confidence for V0 means confidence below 0.70 on a 0-1 scale unless a later planning decision changes the threshold.
-- "Dispatched" is an operator-recorded status that indicates a human response workflow outside the prototype; the system itself does not dispatch rescue.
-- Caller phone is optional in V0 because local microphone testing may not have a real caller phone number.
-- Transcript and case data may be retained for the current demo/testing session; long-term retention and legal compliance policies are deferred beyond V0.
-- Operators in V0 are trusted demo users; production identity, access control, and audit policy are deferred beyond V0.
-- Microsoft Azure usage evidence is a hackathon demonstration requirement and should not be presented as an official emergency-service endorsement.
+- Narayana AI V0 is a hackathon prototype module, not an official emergency hotline replacement.
+- Local browser microphone is the required V0 input path; uploaded audio is optional.
+- Twilio Media Streams and Azure Communication Services are V1 adapter targets because Thailand number support, paid subscription requirements, and trial-account restrictions must be validated separately.
+- The initial emitted case status is `pending`.
+- Low confidence defaults to below 0.75 on a 0-1 scale.
+- Case storage may use a local repository or Cosmos DB, but the voice gateway must still emit a case object when storage is unavailable.
+- Production authentication, PDPA compliance implementation, real SMS sending, and official emergency-service integration are out of scope for V0.

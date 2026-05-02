@@ -1,408 +1,400 @@
-# Tasks: Narayana AI Voice Intake
+# Tasks: Narayana AI Azure Voice Gateway
 
 **Input**: Design documents from `/specs/001-crisis-voice-triage/`  
 **Prerequisites**: [plan.md](./plan.md), [spec.md](./spec.md), [research.md](./research.md), [data-model.md](./data-model.md), [contracts/](./contracts/), [quickstart.md](./quickstart.md)
 
-**Tests**: Test tasks are included because the feature explicitly requires triage logic, VAD state transition, local repository, local microphone/mock provider, and Thai extraction tests.
+**Goal**: Fastest path to a working hackathon demo: local transcript -> safe RED case -> debug UI -> browser mic -> VAD/WebSocket -> Azure provider adapters -> Cosmos/Voice Live/phone adapter placeholders.
 
-**Organization**: Tasks are grouped by independently testable user-story increments and ordered for a working local demo first:
+## Phase 1: Backend Skeleton
 
-1. Local transcript-to-case
-2. Dashboard
-3. Local microphone + VAD debug
-4. Azure AI integration
-5. Cosmos DB
-6. SignalR/live updates
-7. Optional upload link
-8. Telephony adapter interface only
+**Purpose**: Create the FastAPI project shape and configuration foundation.
 
-## Format: `[ID] [P?] [Story] Description`
+- [ ] T001 Create FastAPI app skeleton in `app/main.py`
+  - Files: `app/main.py`, `app/api/__init__.py`, `app/core/__init__.py`, `app/models/__init__.py`, `app/services/__init__.py`
+  - Acceptance: `GET /api/health/azure` can be registered later without changing app creation; app imports without side effects.
+  - Dependencies: none
+  - Test: `python -m compileall app`
 
-- **[P]**: Can run in parallel because it touches different files and has no dependency on incomplete tasks.
-- **[Story]**: User story label for story phases only.
-- Every task includes an exact file path.
+- [ ] T002 Add backend dependencies and pytest config in `requirements.txt`
+  - Files: `requirements.txt`, `pytest.ini`
+  - Acceptance: dependencies include FastAPI, Uvicorn, Pydantic, pytest, pytest-asyncio, httpx, websockets, python-dotenv, Azure Speech SDK, OpenAI client, Azure Cosmos SDK, Azure Identity.
+  - Dependencies: T001
+  - Test: `pip install -r requirements.txt`
 
-## Phase 1: Setup
+- [ ] T003 Create environment configuration template in `.env.example`
+  - Files: `.env.example`
+  - Acceptance: includes `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION`, `AZURE_VOICE_LIVE_ENDPOINT`, `AZURE_VOICE_LIVE_MODEL`, `COSMOS_DB_ENDPOINT`, `COSMOS_DB_KEY`, `COSMOS_DB_DATABASE`, `COSMOS_DB_CONTAINER`, and `USE_MOCK_SERVICES=true`.
+  - Dependencies: none
+  - Test: N/A
 
-**Purpose**: Create the two-app project skeleton, local environment examples, and baseline tooling.
-
-- [ ] T001 Create the `backend/` FastAPI directory structure from the plan in `backend/app/main.py`
-- [ ] T002 Create backend Python package markers in `backend/app/__init__.py`, `backend/app/api/__init__.py`, `backend/app/core/__init__.py`, `backend/app/models/__init__.py`, `backend/app/repositories/__init__.py`, and `backend/app/services/__init__.py`
-- [ ] T003 Create backend dependency list with FastAPI, Uvicorn, Pydantic, pytest, pytest-asyncio, httpx, python-dotenv, azure-cosmos, azure-identity, azure-cognitiveservices-speech, openai, websockets, and Azure Monitor OpenTelemetry in `backend/requirements.txt`
-- [ ] T004 Create backend local environment template with all required variables and `USE_MOCK_SERVICES=true` in `backend/.env.example`
-- [ ] T005 Create backend pytest configuration and import path settings in `backend/pytest.ini`
-- [ ] T006 Scaffold the Next.js TypeScript frontend app with Tailwind CSS under `frontend/package.json`
-- [ ] T007 Configure shadcn/ui project metadata and aliases in `frontend/components.json`
-- [ ] T008 Create frontend environment template for API and WebSocket URLs in `frontend/.env.example`
-- [ ] T009 Create frontend TypeScript, Next.js, Tailwind, and PostCSS configuration in `frontend/tsconfig.json`, `frontend/next.config.ts`, `frontend/tailwind.config.ts`, and `frontend/postcss.config.mjs`
-- [ ] T010 Create shared frontend layout and global stylesheet placeholders in `frontend/app/layout.tsx` and `frontend/app/globals.css`
-- [ ] T011 Add local data and secret ignores for backend and frontend environment files in `.gitignore`
-
-**Checkpoint**: Both app skeletons exist and can accept implementation tasks.
+- [ ] T004 Implement typed settings and provider-mode helpers in `app/core/config.py`
+  - Files: `app/core/config.py`
+  - Acceptance: settings load from environment, expose `use_mock_services`, Azure completeness checks, Cosmos completeness check, and selected provider mode without printing secrets.
+  - Dependencies: T003
+  - Test: `pytest tests/unit/test_provider_fallback.py`
 
 ---
 
-## Phase 2: Foundational
+## Phase 2: Domain Models
 
-**Purpose**: Implement shared config, domain models, repository interface, provider interfaces, and API wiring that block user-story work.
+**Purpose**: Define the stable schema that mock, Azure, case storage, and the UI all share.
 
-**Critical**: No user-story implementation should start until these tasks are complete.
+- [ ] T005 [P] Create audio and debug event models in `app/models/audio.py`
+  - Files: `app/models/audio.py`
+  - Acceptance: includes `AudioFrame`, `AudioDebugEvent`, `VoiceGatewaySession`, `CallerTurn`, VAD states, input modes, and required debug event names.
+  - Dependencies: T001
+  - Test: `pytest tests/unit/test_vad_service.py`
 
-- [ ] T012 Implement typed backend settings, mock-mode detection, and low-confidence threshold defaults in `backend/app/core/config.py`
-- [ ] T013 [P] Implement `TriageLevel`, `CaseStatus`, `VadState`, and transcript enums in `backend/app/models/triage.py`
-- [ ] T014 [P] Implement Pydantic models for `CrisisCase`, `TranscriptTurn`, `EvidenceFact`, `VoiceTimingEvent`, `OperatorUpdate`, and `SimulatedOutboundAction` in `backend/app/models/case.py`
-- [ ] T015 Implement `CaseRepository` protocol with create, list, get, update status, override triage, append debug event, and append simulated action methods in `backend/app/repositories/case_repository.py`
-- [ ] T016 Implement local JSON persistence scaffold with atomic read/write helpers in `backend/app/repositories/local_case_repository.py`
-- [ ] T017 Implement repository provider selection that defaults to `LocalCaseRepository` when Cosmos settings are missing in `backend/app/repositories/__init__.py`
-- [ ] T018 Implement `VoiceAgentProvider`, `VoiceTurnInput`, and `VoiceAgentResult` interfaces in `backend/app/services/azure_voice_service.py`
-- [ ] T019 Implement no-op local realtime notifier interface and in-memory connection registry in `backend/app/services/signalr_service.py`
-- [ ] T020 Wire FastAPI app creation, CORS for local frontend, health endpoint, dependency injection, and route registration in `backend/app/main.py`
-- [ ] T021 [P] Create frontend shared API and domain types matching `contracts/openapi.yaml` in `frontend/types/case.ts`
-- [ ] T022 [P] Create frontend API client helpers for case endpoints in `frontend/lib/api-client.ts`
-- [ ] T023 [P] Create compact command-center app shell primitives in `frontend/components/app-shell/AppShell.tsx`
-- [ ] T024 [P] Create triage badge and VAD state badge primitives in `frontend/components/triage/TriageBadge.tsx` and `frontend/components/voice/VadStateBadge.tsx`
+- [ ] T006 [P] Create triage schema models in `app/models/triage.py`
+  - Files: `app/models/triage.py`
+  - Acceptance: includes `TriageResult`, incident enum, triage enum, `SafetyRuleResult`, `missing_fields`, nullable `people_affected`, and status enum values `pending/contacted/dispatched/resolved/closed`.
+  - Dependencies: T001
+  - Test: `pytest tests/unit/test_triage_schema.py`
 
-**Checkpoint**: Domain contracts, local storage selection, provider interfaces, and app wiring are ready.
+- [ ] T007 [P] Create crisis case persistence models in `app/models/case.py`
+  - Files: `app/models/case.py`
+  - Acceptance: includes `CrisisCase`, `CaseRepositoryRecord`, source provider mode, session ID, debug event count, and timestamps.
+  - Dependencies: T006
+  - Test: `pytest tests/unit/test_triage_schema.py`
 
----
-
-## Phase 3: User Story 1 - Local Transcript-to-Case MVP (Priority: P1)
-
-**Goal**: Create a structured crisis case from a Thai transcript without microphone, Azure credentials, Twilio, ACS, or Cosmos.
-
-**Independent Test**: Submit the Thai sample transcript to `POST /api/cases/from-transcript` and verify a stored RED case with Thai language, flood/medical/trapped evidence, confidence, summary, triage reason, and `human_review_required=true`.
-
-### Tests for User Story 1
-
-- [ ] T025 [P] [US1] Add unit tests for RED, YELLOW, GREEN, low-confidence, and ambiguous triage outcomes in `backend/tests/unit/test_triage_service.py`
-- [ ] T026 [P] [US1] Add unit tests for local repository create, list, get, status update, triage override, and persistence in `backend/tests/unit/test_local_case_repository.py`
-- [ ] T027 [P] [US1] Add integration test for Thai sample transcript extraction to RED case in `backend/tests/integration/test_thai_structured_extraction.py`
-- [ ] T028 [P] [US1] Add API contract tests for `POST /api/cases/from-transcript`, `GET /api/cases`, and `GET /api/cases/{case_id}` in `backend/tests/integration/test_cases_api.py`
-
-### Implementation for User Story 1
-
-- [ ] T029 [P] [US1] Implement deterministic RED/YELLOW/GREEN keyword and evidence rules in `backend/app/services/triage_service.py`
-- [ ] T030 [US1] Implement Thai sample extraction for location, flood incident, elderly person, breathing difficulty, trapped context, immediate needs, summary, and triage reason in `backend/app/services/triage_service.py`
-- [ ] T031 [US1] Implement low-confidence and ambiguity handling that forces `human_review_required=true` in `backend/app/services/triage_service.py`
-- [ ] T032 [US1] Implement safe Thai guidance script selection for RED, YELLOW, GREEN, and general waiting guidance in `backend/app/services/triage_service.py`
-- [ ] T033 [US1] Complete `LocalCaseRepository` create, list, get, status update, triage override, debug event append, and simulated action append behavior in `backend/app/repositories/local_case_repository.py`
-- [ ] T034 [US1] Implement case creation, transcript-to-case request handling, case listing, and case detail endpoints in `backend/app/api/routes_cases.py`
-- [ ] T035 [US1] Register case routes and backend dependencies in `backend/app/main.py`
-- [ ] T036 [US1] Add manual transcript submission page state and redirect to Live Cases in `frontend/app/page.tsx`
-- [ ] T037 [US1] Add client helper for `POST /api/cases/from-transcript` in `frontend/lib/api-client.ts`
-- [ ] T038 [US1] Verify Thai sample creates a RED case through backend tests and document the command result in `specs/001-crisis-voice-triage/tasks.md`
-
-**Checkpoint**: Local transcript-to-case MVP works end-to-end and is independently demoable.
+- [ ] T008 Add unit tests for triage schema validation in `tests/unit/test_triage_schema.py`
+  - Files: `tests/unit/test_triage_schema.py`
+  - Acceptance: validates required fields, enum rejection, `confidence` bounds, nullable `people_affected`, nullable `caller_phone_optional`, and default `pending` status behavior.
+  - Dependencies: T006, T007
+  - Test: `pytest tests/unit/test_triage_schema.py`
 
 ---
 
-## Phase 4: User Story 2 - Live Cases Dashboard and Case Detail (Priority: P2)
+## Phase 3: Mock Transcript-To-Case MVP (US1)
 
-**Goal**: Operators can scan prioritized cases, open details, understand triage rationale, update status, and override priority.
+**Goal**: A developer can submit the Thai transcript and get a safe structured RED case locally with no Azure credentials.
 
-**Independent Test**: Seed RED, YELLOW, and GREEN cases; open `/cases`; verify RED is prioritized; open a case detail; update status and override priority while preserving AI triage reason.
+**Independent Test**: `POST /api/triage/from-transcript` with the Thai sample returns `incident_type=flood`, `triage_level=RED`, `location_text=Hat Yai/หาดใหญ่`, `human_review_required=true`, and `status=pending`.
 
-### Tests for User Story 2
+- [ ] T009 [P] [US1] Define provider interface in `app/services/voice_agent_provider.py`
+  - Files: `app/services/voice_agent_provider.py`
+  - Acceptance: includes `VoiceAgentProvider`, provider health result, transcript input, `VoiceProviderResult`, and async `process_transcript`/future `process_turn` shape.
+  - Dependencies: T005, T006
+  - Test: `python -m compileall app/services/voice_agent_provider.py`
 
-- [ ] T039 [P] [US2] Add backend integration tests for status update and triage override endpoints in `backend/tests/integration/test_operator_case_updates.py`
-- [ ] T040 [P] [US2] Add frontend component tests for triage badge, case table row ordering, and status controls in `frontend/tests/cases/components.test.tsx`
-- [ ] T041 [P] [US2] Add Playwright workflow test for list, detail, status update, and priority override using mock backend data in `frontend/tests/e2e/operator-dashboard.spec.ts`
+- [ ] T010 [US1] Implement deterministic mock provider in `app/services/mock_voice_provider.py`
+  - Files: `app/services/mock_voice_provider.py`
+  - Acceptance: Thai flood sample maps to flood, RED, Hat Yai/หาดใหญ่, elderly breathing difficulty, rescue/medical needs, high confidence; minor damage and unclear speech fixtures are included.
+  - Dependencies: T009
+  - Test: `pytest tests/integration/test_thai_transcript_to_red_case.py`
 
-### Implementation for User Story 2
+- [ ] T011 [P] [US1] Add safety rule unit tests in `tests/unit/test_safety_rules.py`
+  - Files: `tests/unit/test_safety_rules.py`
+  - Acceptance: tests force RED for breathing difficulty, unconsciousness, severe bleeding, trapped person, active drowning risk, active fire exposure, chest pain, stroke symptoms, and cannot escape.
+  - Dependencies: T006
+  - Test: `pytest tests/unit/test_safety_rules.py`
 
-- [ ] T042 [US2] Implement `PATCH /api/cases/{case_id}/status` and `PATCH /api/cases/{case_id}/triage` in `backend/app/api/routes_cases.py`
-- [ ] T043 [US2] Record operator updates with previous value, new value, reason, and timestamp in `backend/app/repositories/local_case_repository.py`
-- [ ] T044 [US2] Add frontend status update and triage override API helpers in `frontend/lib/api-client.ts`
-- [ ] T045 [P] [US2] Implement compact Live Cases table with priority ordering, status, confidence, human-review flag, and timestamps in `frontend/components/cases/CaseList.tsx`
-- [ ] T046 [P] [US2] Implement case detail summary, transcript, evidence facts, AI reason, confidence, and override history sections in `frontend/components/cases/CaseDetail.tsx`
-- [ ] T047 [P] [US2] Implement status update and priority override controls with reason capture in `frontend/components/cases/CaseActions.tsx`
-- [ ] T048 [US2] Implement Live Cases route with refresh fallback and manual transcript entry access in `frontend/app/cases/page.tsx`
-- [ ] T049 [US2] Implement Case Detail route that loads by case ID and shows operator actions in `frontend/app/cases/[caseId]/page.tsx`
-- [ ] T050 [US2] Add command-center navigation for Live Cases, Voice Debug Console, and Upload Evidence in `frontend/components/app-shell/AppShell.tsx`
-- [ ] T051 [US2] Apply restrained command-center Tailwind tokens, triage colors, table density, and responsive behavior in `frontend/app/globals.css`
-- [ ] T052 [US2] Verify dashboard user flow with seeded RED/YELLOW/GREEN cases and document the command result in `specs/001-crisis-voice-triage/tasks.md`
+- [ ] T012 [US1] Implement deterministic safety rules in `app/services/safety_rules.py`
+  - Files: `app/services/safety_rules.py`
+  - Acceptance: forces RED for configured red flags, requires review for confidence below 0.75, missing location, contradictory facts, or unsafe GREEN; never sets `closed` or `dispatched`.
+  - Dependencies: T006, T011
+  - Test: `pytest tests/unit/test_safety_rules.py`
 
-**Checkpoint**: Operators can use the dashboard and case detail workflow without microphone or Azure services.
+- [ ] T013 [P] [US1] Add Thai transcript integration test in `tests/integration/test_thai_transcript_to_red_case.py`
+  - Files: `tests/integration/test_thai_transcript_to_red_case.py`
+  - Acceptance: Thai sample returns required structured JSON with status `pending`, RED triage, review required, and explanation mentioning trapped/breathing difficulty.
+  - Dependencies: T010, T012
+  - Test: `pytest tests/integration/test_thai_transcript_to_red_case.py`
 
----
+- [ ] T014 [US1] Implement transcript triage endpoint in `app/api/routes_triage.py`
+  - Files: `app/api/routes_triage.py`, `app/main.py`
+  - Acceptance: `POST /api/triage/from-transcript` accepts transcript, selects provider, applies safety rules, returns `TriageResult`/case JSON, and validates malformed input.
+  - Dependencies: T004, T010, T012, T013
+  - Test: `pytest tests/integration/test_thai_transcript_to_red_case.py`
 
-## Phase 5: User Story 4 - Local Microphone and VAD Debug Console (Priority: P3)
-
-**Goal**: Browser microphone streams PCM frames to FastAPI, backend VAD manages turns, debug UI shows silence/speech/listening/thinking/speaking, and barge-in is logged.
-
-**Independent Test**: Open `/voice-debug`, allow microphone, speak and pause; verify VAD states and timing events appear; trigger assistant-speaking then speak again and verify barge-in.
-
-### Tests for User Story 4
-
-- [ ] T053 [P] [US4] Add VAD state transition unit tests for silence, speech start, end-of-turn silence threshold, thinking, speaking, and barge-in in `backend/tests/unit/test_vad_service.py`
-- [ ] T054 [P] [US4] Add WebSocket voice flow integration test with mock audio frames and mock provider in `backend/tests/integration/test_local_voice_flow.py`
-- [ ] T055 [P] [US4] Add frontend unit tests for audio client frame sizing, connection lifecycle, and debug event rendering in `frontend/tests/voice/audio-client.test.ts`
-
-### Implementation for User Story 4
-
-- [ ] T056 [US4] Implement 20 ms PCM16 frame state machine, energy threshold, 200 ms pre-speech padding, 750 ms silence threshold, and barge-in detection in `backend/app/services/vad_service.py`
-- [ ] T057 [US4] Implement voice session orchestration, provider invocation after completed turns, and debug event creation in `backend/app/services/audio_gateway.py`
-- [ ] T058 [US4] Implement `MockVoiceProvider` responses for Thai flood sample, minor property damage, and unclear noisy speech in `backend/app/services/azure_voice_service.py`
-- [ ] T059 [US4] Implement `/ws/voice` client/server event handling from `contracts/voice-websocket.md` in `backend/app/api/routes_voice.py`
-- [ ] T060 [US4] Implement `GET /api/debug/events` with session and case filters in `backend/app/api/routes_voice.py`
-- [ ] T061 [US4] Register voice routes in `backend/app/main.py`
-- [ ] T062 [US4] Implement browser microphone capture, downsampling to PCM16 16 kHz mono, 20 ms frame batching, and WebSocket send loop in `frontend/lib/audio-client.ts`
-- [ ] T063 [US4] Implement voice WebSocket client with reconnect, event dispatch, and assistant playback state hooks in `frontend/lib/voice-client.ts`
-- [ ] T064 [P] [US4] Implement VAD state strip, event timeline, transcript stream, and provider status components in `frontend/components/voice/VoiceDebugPanel.tsx`
-- [ ] T065 [US4] Implement Voice Debug Console route with microphone controls, mock-service toggle, Thai sample shortcut, and barge-in test control in `frontend/app/voice-debug/page.tsx`
-- [ ] T066 [US4] Verify local microphone flow with mock services and document the command result in `specs/001-crisis-voice-triage/tasks.md`
-
-**Checkpoint**: Local microphone and VAD debug demo works without Azure services.
+- [ ] T015 [US1] Add provider fallback tests in `tests/unit/test_provider_fallback.py`
+  - Files: `tests/unit/test_provider_fallback.py`
+  - Acceptance: `USE_MOCK_SERVICES=true` selects mock; missing Azure credentials falls back to mock with warning; no test requires real Azure credentials.
+  - Dependencies: T004, T009
+  - Test: `pytest tests/unit/test_provider_fallback.py`
 
 ---
 
-## Phase 6: User Story 3 - Safety Guardrails and Human-Centered Triage (Priority: P2)
+## Phase 4: Case Repository (US1)
 
-**Goal**: The assistant never dispatches automatically, never denies or downgrades emergency help without review, uses safe scripted guidance, and explains every priority.
+**Goal**: Store or emit the generated case locally for preview and later dashboard integration.
 
-**Independent Test**: Run RED, YELLOW, GREEN, ambiguous, and low-confidence scripts and verify human-review flags, safe guidance text, preserved AI reason, and no autonomous dispatch claims.
+- [ ] T016 [P] [US1] Define case repository interface in `app/services/case_repository.py`
+  - Files: `app/services/case_repository.py`
+  - Acceptance: exposes async `create` and `get` methods using `CrisisCase`/`CaseRepositoryRecord`; interface does not mention Cosmos-specific types.
+  - Dependencies: T007
+  - Test: `python -m compileall app/services/case_repository.py`
 
-### Tests for User Story 3
+- [ ] T017 [US1] Implement local JSON case repository in `app/services/local_case_repository.py`
+  - Files: `app/services/local_case_repository.py`
+  - Acceptance: writes and reads case records from a local JSON file path, creates directories as needed, preserves `pending` status, and handles empty file state.
+  - Dependencies: T016
+  - Test: `pytest tests/unit/test_local_case_repository.py`
 
-- [ ] T067 [P] [US3] Add safety regression tests for no auto-dispatch, no denial, no unsafe downgrade, and official-hotline disclaimer in `backend/tests/unit/test_safety_guardrails.py`
-- [ ] T068 [P] [US3] Add Thai safe guidance script tests for RED, YELLOW, GREEN, and ambiguous cases in `backend/tests/unit/test_safe_guidance.py`
+- [ ] T018 [P] [US1] Add local repository tests in `tests/unit/test_local_case_repository.py`
+  - Files: `tests/unit/test_local_case_repository.py`
+  - Acceptance: tests create, get, missing case, JSON persistence, and no automatic dispatch/close.
+  - Dependencies: T016, T017
+  - Test: `pytest tests/unit/test_local_case_repository.py`
 
-### Implementation for User Story 3
+- [ ] T019 [US1] Implement case creation endpoint in `app/api/routes_cases.py`
+  - Files: `app/api/routes_cases.py`, `app/main.py`
+  - Acceptance: `POST /api/cases` stores or emits a valid case and returns `CaseRepositoryRecord`; invalid schema returns validation error.
+  - Dependencies: T014, T017, T018
+  - Test: `pytest tests/integration/test_cases_api.py`
 
-- [ ] T069 [US3] Implement immutable safety guardrail constants and forbidden phrase checks in `backend/app/services/triage_service.py`
-- [ ] T070 [US3] Enforce RED indicators and confidence below 0.70 as `human_review_required=true` in all create/update paths in `backend/app/services/triage_service.py`
-- [ ] T071 [US3] Add safe-script IDs and Thai guidance copy for waiting guidance in `backend/app/services/triage_service.py`
-- [ ] T072 [US3] Surface crisis-intake assistant disclaimer in dashboard shell and voice debug console in `frontend/components/app-shell/AppShell.tsx`
-- [ ] T073 [US3] Show human-review reason, AI triage reason, and operator override reason together in `frontend/components/cases/CaseDetail.tsx`
-- [ ] T074 [US3] Verify RED, low-confidence, and ambiguous safety scenarios and document the command result in `specs/001-crisis-voice-triage/tasks.md`
-
-**Checkpoint**: Safety behavior is test-covered and visible in the operator UI.
-
----
-
-## Phase 7: Azure AI Provider Integration
-
-**Goal**: Add replaceable Azure Voice Live and Speech + Azure OpenAI providers while keeping mock mode as a reliable fallback.
-
-**Independent Test**: With `USE_MOCK_SERVICES=false` and Azure variables present, the Thai sample can be processed through Azure; with variables missing, provider selection falls back to mock mode and reports a recoverable provider event.
-
-### Tests for Azure AI Integration
-
-- [ ] T075 [P] Add provider selection unit tests for mock mode, Voice Live configured mode, Speech plus OpenAI fallback mode, and missing credentials fallback in `backend/tests/unit/test_voice_provider_selection.py`
-- [ ] T076 [P] Add schema validation tests for Azure OpenAI structured triage JSON and invalid JSON fallback in `backend/tests/unit/test_azure_structured_extraction.py`
-
-### Implementation for Azure AI Integration
-
-- [ ] T077 Implement `AzureVoiceLiveProvider` WebSocket session setup, PCM16 audio forwarding, transcript finalization, assistant text handling, and recoverable error mapping in `backend/app/services/azure_voice_service.py`
-- [ ] T078 Implement `AzureSpeechOpenAIProvider` speech-to-text, structured triage extraction, safe JSON validation, and optional text-to-speech hook in `backend/app/services/azure_voice_service.py`
-- [ ] T079 Implement provider factory that prefers Voice Live, falls back to Speech plus OpenAI, then mock mode based on `backend/app/core/config.py`
-- [ ] T080 Add provider status and fallback warnings to voice debug events in `backend/app/services/audio_gateway.py`
-- [ ] T081 Add Azure provider status display and fallback notice to `frontend/components/voice/VoiceDebugPanel.tsx`
-- [ ] T082 Document Azure AI mode setup, mock fallback behavior, and Thai demo smoke test in `README.md`
-
-**Checkpoint**: Azure AI can be enabled without making the local demo dependent on Azure credentials.
+- [ ] T020 [P] [US1] Add cases API tests in `tests/integration/test_cases_api.py`
+  - Files: `tests/integration/test_cases_api.py`
+  - Acceptance: tests `POST /api/cases` with Thai RED case, validation failure, and local repository record fields.
+  - Dependencies: T019
+  - Test: `pytest tests/integration/test_cases_api.py`
 
 ---
 
-## Phase 8: Cosmos DB Repository
+## Phase 5: Debug Console and Manual Transcript UI (US1)
 
-**Goal**: Store cases in Azure Cosmos DB when configured while preserving local JSON fallback.
+**Goal**: A simple React/Next.js console lets reviewers submit the Thai transcript and inspect transcript, triage JSON, safety result, and case preview.
 
-**Independent Test**: With Cosmos variables configured, repository tests create, list, update, and retrieve cases from Cosmos; without variables, the same API uses local JSON.
+- [ ] T021 [P] [US1] Create frontend environment and API client in `frontend/lib/triage-api-client.ts`
+  - Files: `frontend/.env.example`, `frontend/lib/triage-api-client.ts`, `frontend/types/triage.ts`
+  - Acceptance: defines `NEXT_PUBLIC_API_BASE_URL`, request/response types, and client methods for `/api/triage/from-transcript` and `/api/cases`.
+  - Dependencies: T014, T019
+  - Test: `npm test -- triage-api-client`
 
-### Tests for Cosmos DB
+- [ ] T022 [US1] Create compact debug console shell in `frontend/app/voice-debug/page.tsx`
+  - Files: `frontend/app/voice-debug/page.tsx`, `frontend/components/voice/VoiceDebugConsole.tsx`
+  - Acceptance: page shows provider mode, manual transcript textarea, submit button, transcript output, structured JSON, safety result, and case preview.
+  - Dependencies: T021
+  - Test: `npm test -- VoiceDebugConsole`
 
-- [ ] T083 [P] Add repository contract tests that run against `LocalCaseRepository` and a mocked Cosmos container in `backend/tests/unit/test_case_repository_contract.py`
-- [ ] T084 [P] Add Cosmos settings fallback tests in `backend/tests/unit/test_repository_provider.py`
-
-### Implementation for Cosmos DB
-
-- [ ] T085 Implement Cosmos client creation, database/container references, and partition key assumptions in `backend/app/services/cosmos_service.py`
-- [ ] T086 Implement `CosmosCaseRepository` methods matching `CaseRepository` in `backend/app/repositories/cosmos_case_repository.py`
-- [ ] T087 Wire repository provider to select `CosmosCaseRepository` only when all `COSMOS_DB_*` values are present in `backend/app/repositories/__init__.py`
-- [ ] T088 Add Cosmos setup and local fallback documentation to `README.md`
-
-**Checkpoint**: Storage can switch between local JSON and Cosmos without route or frontend changes.
-
----
-
-## Phase 9: SignalR and Local Realtime Dashboard Updates
-
-**Goal**: Dashboard updates when cases are created or changed, using local WebSocket/SSE first and Azure SignalR when configured.
-
-**Independent Test**: Create a case from transcript or voice; verify `/cases` updates without manual refresh. Then update status and verify connected dashboards receive a `case.updated` event.
-
-### Tests for Realtime Updates
-
-- [ ] T089 [P] Add backend WebSocket/SSE notifier tests for `case.created`, `case.updated`, `debug.event`, reconnect snapshot, and duplicate event IDs in `backend/tests/integration/test_realtime_dashboard.py`
-- [ ] T090 [P] Add frontend realtime client tests for event merge, reconnect reload, duplicate suppression, and polling fallback in `frontend/tests/realtime-client.test.ts`
-
-### Implementation for Realtime Updates
-
-- [ ] T091 Implement local WebSocket and SSE case event endpoints from `contracts/realtime-dashboard.md` in `backend/app/api/routes_cases.py`
-- [ ] T092 Publish `case.created`, `case.updated`, and `debug.event` events from case and voice services in `backend/app/services/signalr_service.py`
-- [ ] T093 Implement Azure SignalR management integration when `SIGNALR_CONNECTION_STRING` is present in `backend/app/services/signalr_service.py`
-- [ ] T094 Implement frontend realtime client with WebSocket, SSE or polling fallback, reconnect snapshot, and duplicate event suppression in `frontend/lib/realtime-client.ts`
-- [ ] T095 Connect Live Cases page to realtime events and degraded connection indicator in `frontend/app/cases/page.tsx`
-- [ ] T096 Connect Voice Debug Console to realtime debug events in `frontend/app/voice-debug/page.tsx`
-- [ ] T097 Document local realtime and Azure SignalR mode in `README.md`
-
-**Checkpoint**: Live dashboard updates work locally and have an Azure SignalR adapter path.
+- [ ] T023 [P] [US1] Add frontend debug console component tests in `frontend/tests/voice-debug-console.test.tsx`
+  - Files: `frontend/tests/voice-debug-console.test.tsx`
+  - Acceptance: tests manual transcript submit success, loading state, error state, RED badge rendering, review-required rendering, and case preview status.
+  - Dependencies: T022
+  - Test: `npm test -- voice-debug-console`
 
 ---
 
-## Phase 10: Optional Upload Evidence Link Simulation
+## Phase 6: Local Audio WebSocket and VAD (US2)
 
-**Goal**: Provide a clearly simulated upload-link flow and prepare the production Blob SAS path without real upload dependency in V0.
+**Goal**: Browser microphone streams audio to `/ws/local-audio`; backend emits VAD/debug events and commits turns.
 
-**Independent Test**: Generate a simulated upload link for a case; verify it is stored on the case, appears in the UI, emits `upload.simulated`, and is labeled simulated.
+**Independent Test**: Synthetic audio frames trigger `audio.frame.received`, `vad.speech.start`, `vad.speech.end`, `turn.committed`, and `barge_in.detected`.
 
-### Tests for Upload Link Simulation
+- [ ] T024 [P] [US2] Implement audio frame validation in `app/services/audio_frame_service.py`
+  - Files: `app/services/audio_frame_service.py`
+  - Acceptance: validates sequence, PCM16 encoding, mono channel, 20 ms frame target, base64 payload, and sample rate metadata.
+  - Dependencies: T005
+  - Test: `pytest tests/unit/test_audio_frame_service.py`
 
-- [ ] T098 [P] Add backend tests for simulated upload-link creation, expiration, case association, and simulation flag in `backend/tests/integration/test_upload_simulation.py`
-- [ ] T099 [P] Add frontend tests for upload-link form validation and simulated label rendering in `frontend/tests/uploads/upload-page.test.tsx`
+- [ ] T025 [P] [US2] Add VAD state machine tests in `tests/unit/test_vad_service.py`
+  - Files: `tests/unit/test_vad_service.py`
+  - Acceptance: tests silence, speech start, speech end, 600-900 ms threshold, 150-250 ms pre-speech buffer, thinking/speaking states, and barge-in.
+  - Dependencies: T005
+  - Test: `pytest tests/unit/test_vad_service.py`
 
-### Implementation for Upload Link Simulation
+- [ ] T026 [US2] Implement energy-based VAD in `app/services/vad_service.py`
+  - Files: `app/services/vad_service.py`
+  - Acceptance: classifies speech/silence from PCM frame energy, exposes threshold config, and supports optional WebRTC VAD hook without requiring it.
+  - Dependencies: T024, T025
+  - Test: `pytest tests/unit/test_vad_service.py`
 
-- [ ] T100 Implement `POST /api/uploads/simulate-link` from `contracts/openapi.yaml` in `backend/app/api/routes_uploads.py`
-- [ ] T101 Register upload routes in `backend/app/main.py`
-- [ ] T102 Append simulated outbound actions to cases in `backend/app/repositories/local_case_repository.py`
-- [ ] T103 Add upload simulation API helper in `frontend/lib/api-client.ts`
-- [ ] T104 Implement Upload Evidence page with case selector, simulated link generation, expiration display, and clear simulated labeling in `frontend/app/uploads/page.tsx`
-- [ ] T105 Add production Blob SAS notes without implementing real upload in `README.md`
+- [ ] T027 [US2] Implement turn manager in `app/services/turn_manager.py`
+  - Files: `app/services/turn_manager.py`
+  - Acceptance: buffers pre-speech audio, commits turns after silence threshold, emits required debug events, tracks `listening/thinking/speaking`, and flags barge-in.
+  - Dependencies: T026
+  - Test: `pytest tests/unit/test_vad_service.py`
 
-**Checkpoint**: Evidence upload remains optional and visibly simulated in V0.
+- [ ] T028 [US2] Implement local audio WebSocket route in `app/api/routes_audio.py`
+  - Files: `app/api/routes_audio.py`, `app/main.py`
+  - Acceptance: `/ws/local-audio` accepts `session.start`, `audio.frame`, assistant playback events, and `session.close`; returns required debug and case events.
+  - Dependencies: T010, T012, T027
+  - Test: `pytest tests/integration/test_mock_local_mic_flow.py`
+
+- [ ] T029 [P] [US2] Add mock local mic integration test in `tests/integration/test_mock_local_mic_flow.py`
+  - Files: `tests/integration/test_mock_local_mic_flow.py`
+  - Acceptance: synthetic frames create VAD events, commit a turn, invoke mock provider, apply safety rules, and emit `triage.case.created`.
+  - Dependencies: T028
+  - Test: `pytest tests/integration/test_mock_local_mic_flow.py`
+
+- [ ] T030 [US2] Add browser microphone capture client in `frontend/lib/audio-client.ts`
+  - Files: `frontend/lib/audio-client.ts`, `frontend/lib/voice-ws-client.ts`
+  - Acceptance: uses Web Audio API to request microphone, converts/resamples to PCM16 mono frames, batches 20 ms frames, and sends to `/ws/local-audio`.
+  - Dependencies: T028
+  - Test: `npm test -- audio-client`
+
+- [ ] T031 [US2] Add live VAD state and debug timeline UI in `frontend/components/voice/VoiceDebugConsole.tsx`
+  - Files: `frontend/components/voice/VoiceDebugConsole.tsx`, `frontend/app/voice-debug/page.tsx`
+  - Acceptance: UI shows silence/speech/listening/thinking/speaking, required debug event timeline, transcript, triage JSON, safety result, and generated case preview from WebSocket events.
+  - Dependencies: T030
+  - Test: `npm test -- VoiceDebugConsole`
 
 ---
 
-## Phase 11: Telephony Adapter Interface Only
+## Phase 7: Azure Speech and Azure OpenAI Providers (US1)
 
-**Goal**: Prepare V1 telephony boundaries without implementing Twilio, Azure Communication Services, real phone numbers, or production call handling.
+**Goal**: When credentials exist, the same transcript/case contract works through Azure Speech STT and Azure OpenAI structured triage.
 
-**Independent Test**: Type checks and documentation show telephony interfaces exist, are not wired into V0 runtime, and local microphone remains the only required V0 audio path.
+- [ ] T032 [P] [US1] Implement Azure health endpoint in `app/api/routes_audio.py`
+  - Files: `app/api/routes_audio.py`, `app/core/config.py`, `app/main.py`
+  - Acceptance: `GET /api/health/azure` returns selected provider, configured booleans, missing variable names, warnings, and no secret values.
+  - Dependencies: T004
+  - Test: `pytest tests/unit/test_provider_fallback.py`
 
-- [ ] T106 [P] Define `AudioStreamAdapter`, `LocalMicrophoneAdapter`, `TwilioMediaStreamAdapter`, and `ACSCallAutomationAdapter` protocols without production implementations in `backend/app/services/audio_gateway.py`
-- [ ] T107 Add tests proving Twilio and ACS adapters are not selected in V0 runtime config in `backend/tests/unit/test_telephony_adapters_disabled.py`
-- [ ] T108 Document V1 telephony adapter boundaries and V0 non-goals in `README.md`
+- [ ] T033 [US1] Implement Azure Speech STT provider in `app/services/azure_speech_provider.py`
+  - Files: `app/services/azure_speech_provider.py`
+  - Acceptance: accepts committed turn audio or audio reference, uses Azure Speech credentials when configured, returns transcript/language/confidence, and has clear mockable seams for tests.
+  - Dependencies: T009, T027, T032
+  - Test: manual `pytest tests/unit/test_provider_fallback.py`
 
-**Checkpoint**: Telephony is prepared as an interface only and does not block local demo.
+- [ ] T034 [US1] Implement Azure OpenAI structured triage provider in `app/services/azure_openai_triage_provider.py`
+  - Files: `app/services/azure_openai_triage_provider.py`
+  - Acceptance: sends transcript to Azure OpenAI with strict structured schema, validates response into `TriageResult`, handles invalid JSON/schema failure by returning review-required fallback.
+  - Dependencies: T006, T012, T032
+  - Test: `pytest tests/unit/test_triage_schema.py`
+
+- [ ] T035 [US1] Wire AzureSpeechOpenAIProvider selection in `app/services/voice_agent_provider.py`
+  - Files: `app/services/voice_agent_provider.py`, `app/core/config.py`
+  - Acceptance: `USE_MOCK_SERVICES=true` selects mock; complete Azure Speech/OpenAI credentials select Azure path when mock disabled; incomplete credentials fall back to mock with warning.
+  - Dependencies: T015, T033, T034
+  - Test: `pytest tests/unit/test_provider_fallback.py`
+
+- [ ] T036 [US1] Add manual Azure Speech Thai audio test notes in `README.md`
+  - Files: `README.md`
+  - Acceptance: documents how to run a Thai audio STT smoke test when Azure credentials exist and states the test is skipped when credentials are missing.
+  - Dependencies: T033
+  - Test: manual Azure Speech STT using Thai audio
 
 ---
 
-## Final Phase: Polish and Cross-Cutting Quality Gates
+## Phase 8: Cosmos DB Repository (US1)
 
-**Purpose**: Make the local demo reliable, documented, and presentable.
+**Goal**: Cases can be stored in Cosmos DB when credentials exist, with local JSON fallback remaining default.
 
-- [ ] T109 [P] Add backend quickstart smoke script for health, transcript-to-case, list cases, status update, and override in `backend/tests/integration/test_quickstart_smoke.py`
-- [ ] T110 [P] Add frontend Playwright smoke test for transcript entry, Live Cases, Case Detail, Voice Debug Console, and Upload Evidence navigation in `frontend/tests/e2e/local-demo.spec.ts`
-- [ ] T111 Add Application Insights OpenTelemetry initialization guarded by `APPLICATIONINSIGHTS_CONNECTION_STRING` in `backend/app/main.py`
-- [ ] T112 Add Dockerfile and container startup command for FastAPI deployment in `backend/Dockerfile`
-- [ ] T113 Add Azure Static Web Apps build notes and frontend environment mapping in `infra/static-web-apps/README.md`
-- [ ] T114 Add Azure Container Apps deployment notes and backend environment mapping in `infra/container-apps/README.md`
-- [ ] T115 Update `README.md` with local setup, mock demo, Azure mode, safety constraints, no-dispatch warning, and troubleshooting steps
-- [ ] T116 Run backend test suite and record the result in `specs/001-crisis-voice-triage/tasks.md`
-- [ ] T117 Run frontend lint/test/e2e checks and record the result in `specs/001-crisis-voice-triage/tasks.md`
-- [ ] T118 Manually execute the five demo scenarios from `quickstart.md` and record the result in `specs/001-crisis-voice-triage/tasks.md`
+- [ ] T037 [P] [US1] Implement Cosmos case repository in `app/services/cosmos_case_repository.py`
+  - Files: `app/services/cosmos_case_repository.py`
+  - Acceptance: uses Cosmos endpoint/key/database/container config, stores `CrisisCase` JSON, retrieves by case ID, and does not change API response shape.
+  - Dependencies: T016, T019
+  - Test: manual Cosmos DB write if credentials exist
+
+- [ ] T038 [US1] Add repository selection in `app/services/case_repository.py`
+  - Files: `app/services/case_repository.py`, `app/core/config.py`
+  - Acceptance: selects Cosmos only when all Cosmos variables exist; otherwise selects local JSON; health endpoint can report Cosmos configured state.
+  - Dependencies: T017, T037
+  - Test: `pytest tests/unit/test_provider_fallback.py`
+
+---
+
+## Phase 9: Optional Azure Voice Live Provider (US1)
+
+**Goal**: Add Voice Live as an optional provider without making it required for V0.
+
+- [ ] T039 [US1] Implement optional Azure Voice Live provider in `app/services/azure_voice_live_provider.py`
+  - Files: `app/services/azure_voice_live_provider.py`
+  - Acceptance: connects to configured Voice Live endpoint/model, streams audio frames, receives transcript/audio events, maps recoverable failures to fallback warnings, and passes transcript to Azure OpenAI triage if structured result is unavailable.
+  - Dependencies: T027, T034, T035
+  - Test: manual Voice Live smoke test when credentials exist
+
+- [ ] T040 [US1] Add Voice Live provider selection guard in `app/services/voice_agent_provider.py`
+  - Files: `app/services/voice_agent_provider.py`, `app/core/config.py`
+  - Acceptance: Voice Live is selected only when explicitly configured; missing Voice Live variables never blocks mock or Azure Speech/OpenAI flow.
+  - Dependencies: T039
+  - Test: `pytest tests/unit/test_provider_fallback.py`
+
+---
+
+## Phase 10: Future Phone Adapter Interfaces (US4)
+
+**Goal**: Define Twilio and ACS adapter seams without requiring or enabling them for V0.
+
+- [ ] T041 [P] [US4] Define audio input adapter protocols in `app/services/audio_frame_service.py`
+  - Files: `app/services/audio_frame_service.py`
+  - Acceptance: includes `AudioInputAdapter`, `LocalMicAdapter` naming, and normalized `AudioFrame` output contract.
+  - Dependencies: T024
+  - Test: `pytest tests/unit/test_input_adapters.py`
+
+- [ ] T042 [US4] Add Twilio and ACS adapter placeholders in `app/services/audio_frame_service.py`
+  - Files: `app/services/audio_frame_service.py`, `tests/unit/test_input_adapters.py`
+  - Acceptance: `TwilioMediaStreamAdapter` and `ACSAudioStreamAdapter` exist as disabled V1 placeholders and cannot be selected by default V0 config.
+  - Dependencies: T041
+  - Test: `pytest tests/unit/test_input_adapters.py`
+
+- [ ] T043 [P] [US4] Add adapter interface documentation in `README.md`
+  - Files: `README.md`
+  - Acceptance: documents local mic as V0 path, uploaded audio optional, Twilio/ACS as V1 only, and known phone-number limitations.
+  - Dependencies: T042
+  - Test: N/A
+
+---
+
+## Final Phase: Demo Readiness and Documentation
+
+**Purpose**: Make the hackathon path reproducible for another developer or AI reviewer.
+
+- [ ] T044 Add README local setup, mock demo, and Azure setup in `README.md`
+  - Files: `README.md`
+  - Acceptance: includes install, `.env`, backend run, frontend run, Thai transcript test, mock local mic test, Azure Speech/OpenAI setup, Cosmos setup, and phone-number limitation notes.
+  - Dependencies: T014, T019, T031, T035, T038, T043
+  - Test: follow quickstart commands manually
+
+- [ ] T045 [P] Add end-to-end smoke test script in `tests/integration/test_gateway_demo_smoke.py`
+  - Files: `tests/integration/test_gateway_demo_smoke.py`
+  - Acceptance: exercises health, transcript triage, case creation, and asserts RED/human review/pending for Thai sample.
+  - Dependencies: T014, T019, T032
+  - Test: `pytest tests/integration/test_gateway_demo_smoke.py`
+
+- [ ] T046 Run full backend test suite and record result in `specs/001-crisis-voice-triage/tasks.md`
+  - Files: `specs/001-crisis-voice-triage/tasks.md`
+  - Acceptance: records pass/fail and any skipped Azure/Cosmos manual tests under a verification note.
+  - Dependencies: T001-T045
+  - Test: `pytest`
+
+- [ ] T047 Run frontend test/build checks and record result in `specs/001-crisis-voice-triage/tasks.md`
+  - Files: `specs/001-crisis-voice-triage/tasks.md`
+  - Acceptance: records pass/fail for frontend unit tests/build or notes if frontend scaffold is not present in target repo yet.
+  - Dependencies: T021-T031
+  - Test: `npm test && npm run build`
 
 ---
 
 ## Dependencies and Execution Order
 
-### Phase Dependencies
+### Fastest Demo Path
 
-- Phase 1 Setup has no dependencies.
-- Phase 2 Foundational depends on Phase 1 and blocks all user-story work.
-- Phase 3 US1 Local Transcript-to-Case depends on Phase 2 and is the MVP target.
-- Phase 4 US2 Dashboard depends on Phase 3 because it consumes cases created by the local transcript flow.
-- Phase 5 US4 Local Microphone and VAD Debug depends on Phase 3 because completed voice turns create cases through the transcript-to-case path.
-- Phase 6 US3 Safety depends on Phase 3 and should be completed before public demo.
-- Phase 7 Azure AI depends on Phases 3, 5, and 6.
-- Phase 8 Cosmos DB depends on Phase 3.
-- Phase 9 SignalR/live updates depends on Phases 4 and 5.
-- Phase 10 Upload Link Simulation depends on Phase 4.
-- Phase 11 Telephony Adapter Interface depends on Phase 5.
-- Final polish depends on the phases selected for the demo.
+1. T001-T004: backend skeleton, config, environment.
+2. T005-T008: models and schema validation.
+3. T009-T015: mock transcript-to-triage endpoint with safety.
+4. T016-T020: local case repository and case creation endpoint.
+5. T021-T023: debug UI manual transcript and case preview.
+6. T024-T031: microphone capture, `/ws/local-audio`, VAD, and debug events.
+7. T032-T036: Azure Speech/OpenAI provider and health check.
+8. T037-T040: Cosmos and optional Voice Live.
+9. T041-T043: Twilio/ACS interfaces only.
+10. T044-T047: README and verification.
 
-### User Story Dependencies
+### Parallel Opportunities
 
-- **US1 Capture Thai Crisis Intake by Voice, local transcript slice**: Starts after Foundation; no dependency on dashboard, microphone, Azure, Cosmos, SignalR, upload, or telephony.
-- **US2 Review Prioritized Cases on Dashboard**: Starts after US1 local case API exists; independently testable with seeded cases.
-- **US4 Observe Turn Detection and Audio Timing**: Starts after US1 local case creation exists; independently testable with mock provider and local WebSocket audio.
-- **US3 Keep Triage Safe and Human-Centered**: Starts after US1 triage service exists; independently testable with scripted safety cases.
+- T005, T006, and T007 can run in parallel after T001.
+- T009, T011, and T013 can be prepared in parallel once models are available.
+- T016 and T018 can be prepared alongside T014.
+- T021 and T023 can run while backend repository work finishes.
+- T024 and T025 can run in parallel.
+- T032, T033, and T034 can be split after provider interfaces exist.
+- T037 and T039 can run independently after the core provider/repository interfaces are stable.
+- T041 and T043 can run in parallel once audio frame contracts exist.
 
-### Within Each Story
+## User Story Coverage
 
-- Tests should be written first and fail before implementation.
-- Models and interfaces precede services.
-- Services precede endpoints.
-- Endpoints precede frontend integration.
-- Frontend primitives precede pages.
-- Each checkpoint should be validated before starting the next phase when working sequentially.
+- **US1 Validate Local Voice Intake Pipeline**: T009-T040, T044-T047
+- **US2 Observe VAD, Turn Detection, and Barge-In**: T024-T031
+- **US3 Enforce Crisis Safety Rules After AI Output**: T011-T012 plus safety assertions in T013, T014, T045
+- **US4 Keep Phone Providers as Future Adapters**: T041-T043
 
-## Parallel Opportunities
+## Quality Gates
 
-- Setup tasks T003-T011 can be split once T001-T002 establish folders.
-- Foundational model, frontend type, API client, and UI primitive tasks T013-T024 can run in parallel after T012.
-- US1 test tasks T025-T028 can run in parallel before T029.
-- US2 frontend component tasks T045-T047 can run in parallel after API helpers T044.
-- US4 test tasks T053-T055 can run in parallel before T056.
-- Azure AI provider tasks T077-T081 can be split by provider, factory, backend event, and frontend status display after tests define expected behavior.
-- Cosmos, SignalR, upload, and telephony phases can run in parallel after their listed dependencies are complete.
-
-## Parallel Example: User Story 1
-
-```text
-Task: "T025 [P] [US1] Add unit tests for RED, YELLOW, GREEN, low-confidence, and ambiguous triage outcomes in backend/tests/unit/test_triage_service.py"
-Task: "T026 [P] [US1] Add unit tests for local repository create, list, get, status update, triage override, and persistence in backend/tests/unit/test_local_case_repository.py"
-Task: "T027 [P] [US1] Add integration test for Thai sample transcript extraction to RED case in backend/tests/integration/test_thai_structured_extraction.py"
-Task: "T028 [P] [US1] Add API contract tests for POST /api/cases/from-transcript, GET /api/cases, and GET /api/cases/{case_id} in backend/tests/integration/test_cases_api.py"
-```
-
-## Parallel Example: User Story 2
-
-```text
-Task: "T045 [P] [US2] Implement compact Live Cases table with priority ordering, status, confidence, human-review flag, and timestamps in frontend/components/cases/CaseList.tsx"
-Task: "T046 [P] [US2] Implement case detail summary, transcript, evidence facts, AI reason, confidence, and override history sections in frontend/components/cases/CaseDetail.tsx"
-Task: "T047 [P] [US2] Implement status update and priority override controls with reason capture in frontend/components/cases/CaseActions.tsx"
-```
-
-## Parallel Example: User Story 4
-
-```text
-Task: "T053 [P] [US4] Add VAD state transition unit tests for silence, speech start, end-of-turn silence threshold, thinking, speaking, and barge-in in backend/tests/unit/test_vad_service.py"
-Task: "T054 [P] [US4] Add WebSocket voice flow integration test with mock audio frames and mock provider in backend/tests/integration/test_local_voice_flow.py"
-Task: "T055 [P] [US4] Add frontend unit tests for audio client frame sizing, connection lifecycle, and debug event rendering in frontend/tests/voice/audio-client.test.ts"
-```
-
-## Implementation Strategy
-
-### MVP First
-
-1. Complete Phase 1 Setup.
-2. Complete Phase 2 Foundational.
-3. Complete Phase 3 US1 Local Transcript-to-Case.
-4. Stop and validate local transcript-to-case with the Thai sample.
-5. Add Phase 4 Dashboard for a visual operator demo.
-6. Add Phase 5 Local Microphone and VAD Debug for the voice demo.
-
-### Incremental Delivery
-
-1. Local transcript-to-case API and minimal entry page.
-2. Dashboard and case detail workflow.
-3. Local microphone stream, VAD, debug console, and mock voice provider.
-4. Safety hardening and scripted guidance.
-5. Azure AI provider integration.
-6. Cosmos DB and SignalR cloud adapters.
-7. Optional upload link simulation.
-8. Telephony adapter interfaces only.
-
-### Quality Gates
-
-- Local app runs without Twilio, ACS, real phone numbers, Cosmos, SignalR, or Azure AI credentials.
-- Mock services keep the demo usable offline.
-- Thai flood plus elderly breathing difficulty creates RED and requires human review.
-- Minor property damage only creates GREEN unless uncertainty requires review.
-- Unclear noisy speech sets `human_review_required=true`.
-- Operator override preserves original AI triage reason.
-- Dashboard updates without manual refresh after Phase 9.
-- No system path claims rescue was automatically dispatched.
+- App runs locally with mock mode.
+- App runs locally with Azure Speech/OpenAI credentials.
+- Local microphone creates a case.
+- RED safety cases are never downgraded.
+- Missing or uncertain information requires human review.
+- Phone provider integration is isolated behind adapters and disabled for V0.

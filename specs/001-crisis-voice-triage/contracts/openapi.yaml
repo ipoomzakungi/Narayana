@@ -1,63 +1,45 @@
 openapi: 3.1.0
 info:
-  title: Narayana AI Backend API
-  version: 0.1.0
-  description: REST contract for local-first crisis voice intake, case management, debug events, and simulated upload links.
+  title: Narayana AI Azure Voice Gateway API
+  version: 0.2.0
+  description: REST contract for local-first Azure Voice Gateway health, transcript triage, and case creation.
 servers:
   - url: http://localhost:8000
     description: Local FastAPI development server
 paths:
-  /health:
+  /api/health/azure:
     get:
-      summary: Health check
-      operationId: getHealth
+      summary: Inspect provider configuration health without exposing secrets
+      operationId: getAzureHealth
       responses:
         "200":
-          description: Service health
+          description: Provider health and selected mode
           content:
             application/json:
               schema:
-                type: object
-                required: [status]
-                properties:
-                  status:
-                    type: string
-                    enum: [ok]
-  /api/cases:
-    get:
-      summary: List crisis cases
-      operationId: listCases
-      parameters:
-        - name: triage_level
-          in: query
-          schema:
-            $ref: "#/components/schemas/TriageLevel"
-        - name: status
-          in: query
-          schema:
-            $ref: "#/components/schemas/CaseStatus"
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 200
-            default: 50
-      responses:
-        "200":
-          description: Ordered case list
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [cases]
-                properties:
-                  cases:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/CrisisCase"
+                $ref: "#/components/schemas/AzureHealth"
+  /api/triage/from-transcript:
     post:
-      summary: Create a case directly from structured data
+      summary: Convert transcript text to structured crisis triage
+      operationId: triageFromTranscript
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TriageFromTranscriptRequest"
+      responses:
+        "200":
+          description: Structured triage after safety rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriageCase"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /api/cases:
+    post:
+      summary: Store or emit a structured crisis case
       operationId: createCase
       requestBody:
         required: true
@@ -67,160 +49,15 @@ paths:
               $ref: "#/components/schemas/CreateCaseRequest"
       responses:
         "201":
-          description: Created case
+          description: Stored or emitted case
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CrisisCase"
+                $ref: "#/components/schemas/CaseRepositoryRecord"
         "422":
           $ref: "#/components/responses/ValidationError"
-  /api/cases/from-transcript:
-    post:
-      summary: Create or update a case from a transcript
-      operationId: createCaseFromTranscript
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/FromTranscriptRequest"
-      responses:
-        "201":
-          description: Created case with triage result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CrisisCase"
-        "422":
-          $ref: "#/components/responses/ValidationError"
-  /api/cases/{case_id}:
-    get:
-      summary: Get case detail
-      operationId: getCase
-      parameters:
-        - $ref: "#/components/parameters/CaseId"
-      responses:
-        "200":
-          description: Case detail
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CrisisCase"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /api/cases/{case_id}/status:
-    patch:
-      summary: Update case status
-      operationId: updateCaseStatus
-      parameters:
-        - $ref: "#/components/parameters/CaseId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/StatusUpdateRequest"
-      responses:
-        "200":
-          description: Updated case
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CrisisCase"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "422":
-          $ref: "#/components/responses/ValidationError"
-  /api/cases/{case_id}/triage:
-    patch:
-      summary: Override case triage priority
-      operationId: overrideCaseTriage
-      parameters:
-        - $ref: "#/components/parameters/CaseId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TriageOverrideRequest"
-      responses:
-        "200":
-          description: Updated case
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CrisisCase"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "422":
-          $ref: "#/components/responses/ValidationError"
-  /api/debug/events:
-    get:
-      summary: List voice timing and debug events
-      operationId: listDebugEvents
-      parameters:
-        - name: session_id
-          in: query
-          schema:
-            type: string
-        - name: case_id
-          in: query
-          schema:
-            type: string
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 500
-            default: 100
-      responses:
-        "200":
-          description: Debug events
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [events]
-                properties:
-                  events:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/VoiceTimingEvent"
-  /api/uploads/simulate-link:
-    post:
-      summary: Create a simulated evidence upload link
-      operationId: simulateUploadLink
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SimulatedUploadLinkRequest"
-      responses:
-        "201":
-          description: Simulated upload action
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SimulatedOutboundAction"
-        "404":
-          $ref: "#/components/responses/NotFound"
 components:
-  parameters:
-    CaseId:
-      name: case_id
-      in: path
-      required: true
-      schema:
-        type: string
   responses:
-    NotFound:
-      description: Requested resource was not found
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ApiError"
     ValidationError:
       description: Request validation failed
       content:
@@ -228,133 +65,50 @@ components:
           schema:
             $ref: "#/components/schemas/ApiError"
   schemas:
+    ProviderMode:
+      type: string
+      enum: [mock, azure_speech_openai, azure_voice_live]
+    IncidentType:
+      type: string
+      enum: [flood, fire, medical, accident, earthquake, public_safety, unknown]
     TriageLevel:
       type: string
       enum: [RED, YELLOW, GREEN]
     CaseStatus:
       type: string
-      enum: [new, contacted, dispatched, resolved, closed]
-    VadState:
-      type: string
-      enum: [silence, speech, listening, thinking, speaking]
-    CrisisCase:
+      enum: [pending, contacted, dispatched, resolved, closed]
+    AzureHealth:
       type: object
       required:
-        - case_id
-        - language
-        - incident_type
-        - triage_level
-        - ai_triage_level
-        - confidence
-        - immediate_needs
-        - ai_summary
-        - triage_reason
-        - human_review_required
-        - created_at
-        - updated_at
-        - status
-        - transcript
-        - evidence
-        - operator_overrides
-        - simulated_outbound_actions
+        - use_mock_services
+        - selected_provider
+        - azure_speech_configured
+        - azure_openai_configured
+        - azure_voice_live_configured
+        - cosmos_configured
+        - missing_variables
       properties:
-        case_id:
-          type: string
-        language:
-          type: string
-          examples: [th-TH]
-        incident_type:
-          type: string
-          examples: [flood_medical]
-        triage_level:
-          $ref: "#/components/schemas/TriageLevel"
-        ai_triage_level:
-          $ref: "#/components/schemas/TriageLevel"
-        confidence:
-          type: number
-          minimum: 0
-          maximum: 1
-        location_text:
-          type: string
-          nullable: true
-        people_affected:
-          type: string
-          nullable: true
-        injuries:
-          type: string
-          nullable: true
-        immediate_needs:
-          type: array
-          items:
-            type: string
-        caller_phone_optional:
-          type: string
-          nullable: true
-        ai_summary:
-          type: string
-        triage_reason:
-          type: string
-        human_review_required:
+        use_mock_services:
           type: boolean
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-        status:
-          $ref: "#/components/schemas/CaseStatus"
-        transcript:
-          type: array
-          items:
-            $ref: "#/components/schemas/TranscriptTurn"
-        evidence:
-          type: array
-          items:
-            $ref: "#/components/schemas/EvidenceFact"
-        operator_overrides:
-          type: array
-          items:
-            $ref: "#/components/schemas/OperatorUpdate"
-        simulated_outbound_actions:
-          type: array
-          items:
-            $ref: "#/components/schemas/SimulatedOutboundAction"
-    CreateCaseRequest:
-      type: object
-      required: [language, incident_type, triage_level, confidence, ai_summary, triage_reason]
-      properties:
-        language:
-          type: string
-        incident_type:
-          type: string
-        triage_level:
-          $ref: "#/components/schemas/TriageLevel"
-        confidence:
-          type: number
-          minimum: 0
-          maximum: 1
-        location_text:
-          type: string
-        people_affected:
-          type: string
-        injuries:
-          type: string
-        immediate_needs:
+        selected_provider:
+          $ref: "#/components/schemas/ProviderMode"
+        azure_speech_configured:
+          type: boolean
+        azure_openai_configured:
+          type: boolean
+        azure_voice_live_configured:
+          type: boolean
+        cosmos_configured:
+          type: boolean
+        missing_variables:
           type: array
           items:
             type: string
-        caller_phone_optional:
-          type: string
-        ai_summary:
-          type: string
-        triage_reason:
-          type: string
-        transcript:
+        warnings:
           type: array
           items:
-            $ref: "#/components/schemas/TranscriptTurnInput"
-    FromTranscriptRequest:
+            type: string
+    TriageFromTranscriptRequest:
       type: object
       required: [transcript]
       properties:
@@ -363,182 +117,111 @@ components:
           minLength: 1
           examples:
             - น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง
+        language_hint:
+          type: string
+          default: th
+        provider_mode:
+          $ref: "#/components/schemas/ProviderMode"
+        caller_phone_optional:
+          type:
+            - string
+            - "null"
+    TriageCase:
+      type: object
+      required:
+        - case_id
+        - language
+        - incident_type
+        - triage_level
+        - confidence
+        - location_text
+        - people_affected
+        - injuries
+        - immediate_needs
+        - caller_phone_optional
+        - ai_summary
+        - triage_reason
+        - human_review_required
+        - missing_fields
+        - created_at
+        - updated_at
+        - status
+      properties:
+        case_id:
+          type: string
         language:
           type: string
-          default: th-TH
-        caller_phone_optional:
-          type: string
-        session_id:
-          type: string
-    StatusUpdateRequest:
-      type: object
-      required: [status]
-      properties:
-        status:
-          $ref: "#/components/schemas/CaseStatus"
-        operator_id:
-          type: string
-        note:
-          type: string
-    TriageOverrideRequest:
-      type: object
-      required: [triage_level, reason]
-      properties:
+        incident_type:
+          $ref: "#/components/schemas/IncidentType"
         triage_level:
           $ref: "#/components/schemas/TriageLevel"
-        reason:
-          type: string
-          minLength: 1
-        operator_id:
-          type: string
-    TranscriptTurnInput:
-      type: object
-      required: [speaker, text]
-      properties:
-        speaker:
-          type: string
-          enum: [caller, assistant, operator, system]
-        text:
-          type: string
-        language:
-          type: string
         confidence:
           type: number
           minimum: 0
           maximum: 1
-    TranscriptTurn:
-      allOf:
-        - $ref: "#/components/schemas/TranscriptTurnInput"
-        - type: object
-          required: [turn_id, started_at, is_final]
-          properties:
-            turn_id:
-              type: string
-            case_id:
-              type: string
-              nullable: true
-            started_at:
-              type: string
-              format: date-time
-            ended_at:
-              type: string
-              format: date-time
-              nullable: true
-            duration_ms:
-              type: integer
-              nullable: true
-            is_final:
-              type: boolean
-    EvidenceFact:
-      type: object
-      required: [fact_id, field, value, confidence, requires_confirmation]
-      properties:
-        fact_id:
+        location_text:
           type: string
-        field:
-          type: string
-        value:
-          type: string
-        source_turn_id:
-          type: string
-          nullable: true
-        confidence:
-          type: number
+        people_affected:
+          type:
+            - integer
+            - "null"
           minimum: 0
-          maximum: 1
-        requires_confirmation:
+        injuries:
+          type: string
+        immediate_needs:
+          type: array
+          items:
+            type: string
+        caller_phone_optional:
+          type:
+            - string
+            - "null"
+        ai_summary:
+          type: string
+        triage_reason:
+          type: string
+        human_review_required:
           type: boolean
-    VoiceTimingEvent:
-      type: object
-      required: [event_id, session_id, event_type, timestamp]
-      properties:
-        event_id:
+        missing_fields:
+          type: array
+          items:
+            type: string
+        created_at:
           type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        status:
+          $ref: "#/components/schemas/CaseStatus"
+    CreateCaseRequest:
+      type: object
+      required: [case]
+      properties:
+        case:
+          $ref: "#/components/schemas/TriageCase"
         session_id:
-          type: string
-        case_id:
-          type: string
-          nullable: true
-        event_type:
-          type: string
-        state:
-          $ref: "#/components/schemas/VadState"
-        timestamp:
-          type: string
-          format: date-time
-        duration_ms:
+          type:
+            - string
+            - "null"
+        source_provider:
+          $ref: "#/components/schemas/ProviderMode"
+    CaseRepositoryRecord:
+      type: object
+      required: [case, source_provider, debug_event_count, stored_at]
+      properties:
+        case:
+          $ref: "#/components/schemas/TriageCase"
+        session_id:
+          type:
+            - string
+            - "null"
+        source_provider:
+          $ref: "#/components/schemas/ProviderMode"
+        debug_event_count:
           type: integer
-          nullable: true
-        metadata:
-          type: object
-          additionalProperties: true
-    OperatorUpdate:
-      type: object
-      required: [update_id, case_id, update_type, new_value, created_at]
-      properties:
-        update_id:
-          type: string
-        case_id:
-          type: string
-        operator_id:
-          type: string
-          nullable: true
-        update_type:
-          type: string
-          enum: [priority_override, status_change, note]
-        previous_value:
-          type: string
-          nullable: true
-        new_value:
-          type: string
-        reason:
-          type: string
-          nullable: true
-        created_at:
-          type: string
-          format: date-time
-    SimulatedUploadLinkRequest:
-      type: object
-      required: [case_id]
-      properties:
-        case_id:
-          type: string
-        target_label:
-          type: string
-        filename:
-          type: string
-        content_type:
-          type: string
-        expires_in_minutes:
-          type: integer
-          minimum: 1
-          maximum: 120
-          default: 15
-    SimulatedOutboundAction:
-      type: object
-      required: [action_id, case_id, action_type, is_simulated, created_at]
-      properties:
-        action_id:
-          type: string
-        case_id:
-          type: string
-        action_type:
-          type: string
-          enum: [sms_simulation, upload_link_simulation]
-        target_label:
-          type: string
-          nullable: true
-        url:
-          type: string
-          nullable: true
-        expires_at:
-          type: string
-          format: date-time
-          nullable: true
-        is_simulated:
-          type: boolean
-          const: true
-        created_at:
+          minimum: 0
+        stored_at:
           type: string
           format: date-time
     ApiError:

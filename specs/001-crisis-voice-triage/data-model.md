@@ -1,20 +1,13 @@
-# Data Model: Narayana AI Voice Intake
+# Data Model: Narayana AI Azure Voice Gateway
 
 ## Enumerations
 
-### TriageLevel
+### InputMode
 
-- `RED`: Life-threatening, urgent medical danger, trapped person, breathing difficulty, severe bleeding, fire danger, or drowning risk.
-- `YELLOW`: Injured or at risk but not immediately life-threatening from available facts.
-- `GREEN`: Caller appears safe and needs information or non-urgent support.
-
-### CaseStatus
-
-- `new`: Case created and not yet acted on by an operator.
-- `contacted`: Operator has contacted or acknowledged the caller/case.
-- `dispatched`: Operator records that a human response workflow outside the app has been dispatched.
-- `resolved`: Operator records that the crisis need has been resolved.
-- `closed`: Operator closes the case for the demo workflow.
+- `local_mic`
+- `uploaded_audio`
+- `twilio_media_stream`
+- `acs_audio_stream`
 
 ### VadState
 
@@ -24,172 +17,191 @@
 - `thinking`
 - `speaking`
 
-### TranscriptSpeaker
+### ProviderMode
 
-- `caller`
-- `assistant`
-- `operator`
-- `system`
+- `mock`
+- `azure_speech_openai`
+- `azure_voice_live`
 
-## Entity: CrisisCase
+### IncidentType
 
-Represents the structured emergency-intake record shown on the operator dashboard.
+- `flood`
+- `fire`
+- `medical`
+- `accident`
+- `earthquake`
+- `public_safety`
+- `unknown`
+
+### TriageLevel
+
+- `RED`
+- `YELLOW`
+- `GREEN`
+
+### CaseStatus
+
+- `pending`
+- `contacted`
+- `dispatched`
+- `resolved`
+- `closed`
+
+## Entity: VoiceGatewaySession
+
+Tracks one local microphone, uploaded audio, or future phone-provider session.
 
 | Field | Type | Required | Validation / Notes |
 |-------|------|----------|--------------------|
-| `case_id` | string | yes | Stable unique identifier, generated on create. |
-| `language` | string | yes | ISO-like language tag where known, for example `th-TH`; `unknown` allowed when uncertain. |
-| `incident_type` | string | yes | Controlled label such as `flood`, `fire`, `medical`, `public_safety`, `other`, or combined labels for mixed incidents. |
-| `triage_level` | TriageLevel | yes | Current effective priority, including operator override if present. |
-| `ai_triage_level` | TriageLevel | yes | Original AI/rules priority preserved for audit. |
-| `confidence` | number | yes | 0.0 to 1.0. Values below 0.70 force human review in V0. |
-| `location_text` | string | no | Caller-provided location or landmark text. |
-| `people_affected` | string | no | Human-readable count or description, because callers may be imprecise. |
-| `injuries` | string | no | Injury or medical-risk description. |
-| `immediate_needs` | string[] | yes | Needs such as evacuation, medical help, rescue, information, shelter. |
-| `caller_phone_optional` | string | no | Optional because local microphone testing may not have caller phone data. |
-| `ai_summary` | string | yes | Short operator-facing crisis summary. |
-| `triage_reason` | string | yes | Explanation of why current priority was assigned. |
-| `evidence` | EvidenceFact[] | yes | Extracted facts used by triage and summary. |
-| `human_review_required` | boolean | yes | True for RED, low confidence, ambiguity, or safety-sensitive cases. |
+| `session_id` | string | yes | Unique session identifier. |
+| `input_mode` | InputMode | yes | V0 default is `local_mic`; Twilio/ACS modes are disabled by default. |
+| `provider_mode` | ProviderMode | yes | Selected provider after config resolution. |
+| `current_state` | VadState | yes | Current visible gateway state. |
+| `sample_rate_hz` | integer | yes | V0 target is 16000 Hz. |
+| `frame_ms` | integer | yes | V0 target is 20 ms. |
 | `created_at` | datetime | yes | UTC timestamp. |
-| `updated_at` | datetime | yes | UTC timestamp updated on case change. |
-| `status` | CaseStatus | yes | Initial value `new`. |
-| `transcript` | TranscriptTurn[] | yes | Ordered conversation turns. |
-| `debug_event_count` | integer | no | Optional denormalized count for dashboard hints. |
-| `operator_overrides` | OperatorUpdate[] | yes | Priority and status changes made by an operator. |
-| `simulated_outbound_actions` | SimulatedOutboundAction[] | yes | Demo-only SMS/upload-link actions. |
+| `updated_at` | datetime | yes | UTC timestamp. |
+| `case_id` | string | no | Set after case creation. |
 
-## Entity: TranscriptTurn
+## Entity: AudioFrame
 
-Represents a single caller, assistant, operator, or system message.
+Represents one browser-sent audio frame.
 
 | Field | Type | Required | Validation / Notes |
 |-------|------|----------|--------------------|
-| `turn_id` | string | yes | Unique within a case. |
-| `case_id` | string | no | Present once the turn is associated with a case. |
-| `speaker` | TranscriptSpeaker | yes | Caller, assistant, operator, or system. |
-| `text` | string | yes | Transcript or message content. |
-| `language` | string | no | Detected or configured language. |
-| `confidence` | number | no | 0.0 to 1.0 if available. |
-| `started_at` | datetime | yes | UTC timestamp. |
-| `ended_at` | datetime | no | UTC timestamp when turn completes. |
-| `duration_ms` | integer | no | Derived timing. |
-| `is_final` | boolean | yes | False for partial transcript messages. |
+| `session_id` | string | yes | Associated session. |
+| `sequence` | integer | yes | Monotonic per session. |
+| `timestamp_ms` | integer | yes | Client-side stream timestamp. |
+| `encoding` | string | yes | `pcm16` for V0. |
+| `sample_rate_hz` | integer | yes | Should match session target. |
+| `channels` | integer | yes | Mono for V0. |
+| `duration_ms` | integer | yes | 20 ms target. |
+| `audio_base64` | string | yes | Encoded PCM payload. |
+| `assistant_is_speaking` | boolean | yes | Used for barge-in detection. |
 
-## Entity: EvidenceFact
+## Entity: DebugEvent
 
-Represents extracted facts that support the summary and triage decision.
-
-| Field | Type | Required | Validation / Notes |
-|-------|------|----------|--------------------|
-| `fact_id` | string | yes | Unique within the case. |
-| `field` | string | yes | One of `location`, `incident_type`, `people_affected`, `injuries`, `immediate_needs`, `danger`, or `other`. |
-| `value` | string | yes | Extracted text value. |
-| `source_turn_id` | string | no | Transcript turn where the fact was found. |
-| `confidence` | number | yes | 0.0 to 1.0. |
-| `requires_confirmation` | boolean | yes | True until critical fact is confirmed. |
-
-## Entity: TriageAssessment
-
-Represents the AI and rules decision before operator override.
+Represents VAD, turn, provider, or barge-in telemetry.
 
 | Field | Type | Required | Validation / Notes |
 |-------|------|----------|--------------------|
-| `assessment_id` | string | yes | Unique assessment identifier. |
-| `case_id` | string | yes | Associated case. |
-| `triage_level` | TriageLevel | yes | AI/rules output. |
-| `confidence` | number | yes | 0.0 to 1.0. |
-| `triage_reason` | string | yes | Must include evidence-based rationale. |
-| `red_flags` | string[] | yes | Matched RED indicators, if any. |
-| `human_review_required` | boolean | yes | Must be true for RED or low confidence. |
-| `created_at` | datetime | yes | UTC timestamp. |
-
-## Entity: VoiceTimingEvent
-
-Represents debug evidence for microphone, VAD, turn, and playback behavior.
-
-| Field | Type | Required | Validation / Notes |
-|-------|------|----------|--------------------|
-| `event_id` | string | yes | Unique event identifier. |
-| `session_id` | string | yes | Voice session identifier. |
+| `event_id` | string | yes | Unique event ID. |
+| `session_id` | string | yes | Associated session. |
 | `case_id` | string | no | Present after case creation. |
-| `event_type` | string | yes | `audio_frame`, `vad_state`, `turn_started`, `turn_ended`, `barge_in`, `ai_request`, `ai_response`, `error`. |
-| `state` | VadState | no | Required for state events. |
+| `event_type` | string | yes | One of required debug event names. |
+| `state` | VadState | no | Present for state events. |
 | `timestamp` | datetime | yes | UTC timestamp. |
 | `duration_ms` | integer | no | Optional event duration. |
-| `metadata` | object | no | Non-secret diagnostic values only. |
+| `metadata` | object | no | Non-secret diagnostics only. |
 
-## Entity: OperatorUpdate
+Required event names:
 
-Represents human case actions.
+- `audio.frame.received`
+- `vad.speech.start`
+- `vad.speech.end`
+- `turn.committed`
+- `ai.request.started`
+- `ai.response.started`
+- `ai.response.completed`
+- `barge_in.detected`
+
+## Entity: CallerTurn
+
+Completed user speech segment after VAD and turn management.
 
 | Field | Type | Required | Validation / Notes |
 |-------|------|----------|--------------------|
-| `update_id` | string | yes | Unique update identifier. |
-| `case_id` | string | yes | Associated case. |
-| `operator_id` | string | no | Optional in V0 trusted-demo mode. |
-| `update_type` | string | yes | `priority_override`, `status_change`, or `note`. |
-| `previous_value` | string | no | Previous priority/status when relevant. |
-| `new_value` | string | yes | New priority/status/note value. |
-| `reason` | string | no | Required for priority override. |
+| `turn_id` | string | yes | Unique per session. |
+| `session_id` | string | yes | Associated session. |
+| `started_at` | datetime | yes | UTC timestamp. |
+| `ended_at` | datetime | yes | UTC timestamp. |
+| `duration_ms` | integer | yes | Turn duration. |
+| `pre_speech_padding_ms` | integer | yes | 150-250 ms target. |
+| `silence_threshold_ms` | integer | yes | 600-900 ms target. |
+| `audio_ref` | string | no | Internal reference, not raw audio in logs. |
+| `barge_in` | boolean | yes | True if caller interrupted assistant output. |
+
+## Entity: VoiceProviderResult
+
+Common provider output before safety rules.
+
+| Field | Type | Required | Validation / Notes |
+|-------|------|----------|--------------------|
+| `provider_mode` | ProviderMode | yes | Provider that produced the result. |
+| `transcript` | string | yes | Final transcript for committed turn. |
+| `language` | string | yes | Expected `th` for Thai demo. |
+| `confidence` | number | yes | 0.0 to 1.0. |
+| `triage` | TriageCase | yes | Structured provider triage JSON. |
+| `response_text` | string | no | Optional short safe guidance. |
+| `provider_warnings` | string[] | yes | Fallbacks or recoverable issues. |
+
+## Entity: TriageCase
+
+The structured crisis JSON produced by provider plus safety rules.
+
+| Field | Type | Required | Validation / Notes |
+|-------|------|----------|--------------------|
+| `case_id` | string | yes | Generated if provider omits it. |
+| `language` | string | yes | `th`, `en`, or detected language code. |
+| `incident_type` | IncidentType | yes | Controlled enum. |
+| `triage_level` | TriageLevel | yes | Safety rules may force RED. |
+| `confidence` | number | yes | 0.0 to 1.0. |
+| `location_text` | string | yes | Empty string means missing location. |
+| `people_affected` | integer/null | yes | Null when unknown. |
+| `injuries` | string | yes | Empty string allowed if none mentioned. |
+| `immediate_needs` | string[] | yes | Rescue, medical, evacuation, information, etc. |
+| `caller_phone_optional` | string/null | yes | Null for local microphone V0. |
+| `ai_summary` | string | yes | Short operator/developer summary. |
+| `triage_reason` | string | yes | Must include extracted evidence and safety reason. |
+| `human_review_required` | boolean | yes | True for RED, confidence < 0.75, missing location, or contradictions. |
+| `missing_fields` | string[] | yes | Includes `location_text` when missing. |
 | `created_at` | datetime | yes | UTC timestamp. |
+| `updated_at` | datetime | yes | UTC timestamp. |
+| `status` | CaseStatus | yes | Initial value `pending`. |
 
-## Entity: SafeGuidanceScript
+## Entity: SafetyRuleResult
 
-Represents approved waiting guidance selected by incident context.
-
-| Field | Type | Required | Validation / Notes |
-|-------|------|----------|--------------------|
-| `script_id` | string | yes | Stable script identifier. |
-| `incident_type` | string | yes | Incident label or `general`. |
-| `triage_level` | TriageLevel | no | Optional priority-specific script. |
-| `language` | string | yes | Thai-first for V0. |
-| `text` | string | yes | Must not claim dispatch or hotline replacement. |
-| `safety_notes` | string[] | yes | Internal notes for why script is safe. |
-
-## Entity: SimulatedOutboundAction
-
-Represents demo-only SMS or upload-link simulation.
+Deterministic post-AI rule output.
 
 | Field | Type | Required | Validation / Notes |
 |-------|------|----------|--------------------|
-| `action_id` | string | yes | Unique identifier. |
-| `case_id` | string | yes | Associated case. |
-| `action_type` | string | yes | `sms_simulation` or `upload_link_simulation`. |
-| `target_label` | string | no | Display label only, not a required real phone number. |
-| `url` | string | no | Placeholder or local route for upload simulation. |
-| `expires_at` | datetime | no | Required for upload-link simulation. |
-| `is_simulated` | boolean | yes | Must be true in V0. |
-| `created_at` | datetime | yes | UTC timestamp. |
+| `forced_triage_level` | TriageLevel/null | yes | RED when a RED trigger is present. |
+| `human_review_required` | boolean | yes | Final review decision. |
+| `matched_rules` | string[] | yes | Rule IDs, for example `red.breathing_difficulty`. |
+| `reason` | string | yes | Explainable safety overlay reason. |
+
+## Entity: CaseRepositoryRecord
+
+Persistence wrapper for local or Cosmos case storage.
+
+| Field | Type | Required | Validation / Notes |
+|-------|------|----------|--------------------|
+| `case` | TriageCase | yes | Stored case payload. |
+| `session_id` | string | no | Source session. |
+| `source_provider` | ProviderMode | yes | Provider used. |
+| `debug_event_count` | integer | yes | Number of associated debug events. |
+| `stored_at` | datetime | yes | UTC timestamp. |
 
 ## State Transitions
+
+### VAD State
+
+```text
+listening -> silence -> speech -> thinking -> speaking -> listening
+speech -> speech -> silence -> turn.committed -> thinking
+speaking -> barge_in.detected -> speech
+```
 
 ### Case Status
 
 ```text
-new -> contacted -> dispatched -> resolved -> closed
-new -> resolved -> closed
-new -> closed
-contacted -> resolved -> closed
-contacted -> closed
-dispatched -> resolved -> closed
+pending -> contacted -> dispatched -> resolved -> closed
+pending -> resolved -> closed
+pending -> closed
 ```
 
 Rules:
 
-- The system may create a case with `new` only.
-- Only an operator action can set `dispatched`.
-- `closed` is terminal for V0 unless a future reopen workflow is explicitly added.
-
-### Triage Override
-
-```text
-AI triage assigned -> operator may override current triage_level -> AI triage preserved as ai_triage_level
-```
-
-Rules:
-
-- Operator override requires a reason.
-- RED and low-confidence cases remain `human_review_required = true` even if an operator later lowers the current priority.
-- The case detail view must show both the AI/rules reason and the operator override reason.
+- The gateway creates cases with `pending` only.
+- The gateway never sets `dispatched`, `resolved`, or `closed` automatically.
+- Human/operator workflow owns later status transitions.

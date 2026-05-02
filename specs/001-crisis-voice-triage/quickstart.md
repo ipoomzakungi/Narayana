@@ -1,60 +1,50 @@
-# Quickstart: Narayana AI Voice Intake
-
-This quickstart describes the expected local MVP workflow after implementation tasks scaffold the frontend and backend.
+# Quickstart: Narayana AI Azure Voice Gateway
 
 ## Prerequisites
 
-- Node.js LTS
-- Python 3.11 or newer
-- A browser with microphone permission support
-- Optional Azure resources for non-mock mode:
-  - Azure Speech or Microsoft Foundry resource for Voice Live/Speech
-  - Azure OpenAI deployment
-  - Azure Cosmos DB for NoSQL
-  - Azure SignalR Service
-  - Application Insights
+- Python 3.11+
+- Node.js LTS if running the debug console
+- Browser with microphone permission support
+- Optional Azure credentials for Speech/OpenAI/Cosmos tests
 
-## Environment Files
+## Environment
 
-Create environment files from the committed examples:
+Create local backend environment:
 
 ```powershell
-Copy-Item backend\.env.example backend\.env
-Copy-Item frontend\.env.example frontend\.env.local
+Copy-Item .env.example .env
 ```
 
-Backend `.env.example` must include:
+Required `.env.example` values:
 
 ```text
 AZURE_SPEECH_KEY=
 AZURE_SPEECH_REGION=
-AZURE_VOICE_LIVE_ENDPOINT=
 AZURE_OPENAI_ENDPOINT=
 AZURE_OPENAI_API_KEY=
 AZURE_OPENAI_DEPLOYMENT=
+AZURE_OPENAI_API_VERSION=
+AZURE_VOICE_LIVE_ENDPOINT=
+AZURE_VOICE_LIVE_MODEL=
 COSMOS_DB_ENDPOINT=
 COSMOS_DB_KEY=
 COSMOS_DB_DATABASE=
 COSMOS_DB_CONTAINER=
-SIGNALR_CONNECTION_STRING=
-APPLICATIONINSIGHTS_CONNECTION_STRING=
 USE_MOCK_SERVICES=true
 ```
 
-Frontend `.env.example` must include:
+Frontend:
 
 ```text
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-NEXT_PUBLIC_VOICE_WS_URL=ws://localhost:8000/ws/voice
-NEXT_PUBLIC_CASES_WS_URL=ws://localhost:8000/ws/cases
+NEXT_PUBLIC_LOCAL_AUDIO_WS_URL=ws://localhost:8000/ws/local-audio
 ```
 
-Do not commit `.env` or `.env.local`.
+Do not commit `.env` files.
 
-## Run Backend Locally
+## Run Backend
 
 ```powershell
-Set-Location backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -62,110 +52,99 @@ $env:USE_MOCK_SERVICES = "true"
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Expected checks:
+Check health:
 
 ```powershell
-Invoke-RestMethod http://localhost:8000/health
+Invoke-RestMethod http://localhost:8000/api/health/azure
 ```
 
-## Run Frontend Locally
+## Transcript Triage Smoke Test
 
 ```powershell
-Set-Location frontend
+$body = @{
+  transcript = "น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง"
+  language_hint = "th"
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://localhost:8000/api/triage/from-transcript `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+Expected result:
+
+- `language`: `th`
+- `incident_type`: `flood`
+- `triage_level`: `RED`
+- `location_text`: `Hat Yai` or `หาดใหญ่`
+- `injuries`: elderly person breathing difficulty
+- `immediate_needs`: includes `rescue` and `medical`
+- `human_review_required`: `true`
+- `status`: `pending`
+
+## Run Debug Console
+
+```powershell
 npm install
 npm run dev
 ```
 
-Open:
+Open the voice debug console and verify:
 
-- `http://localhost:3000/cases` for Live Cases
-- `http://localhost:3000/voice-debug` for microphone and VAD testing
-- `http://localhost:3000/uploads` for simulated upload-link testing
+- Microphone start/stop works.
+- VAD state shows silence, speech, listening, thinking, speaking.
+- Debug event timeline receives required event names.
+- Transcript panel shows committed turns.
+- Triage JSON panel shows structured result.
+- Safety panel shows forced RED or review reasons.
+- Case preview shows `pending` status.
 
-## Demo Flow With Mock Services
-
-1. Start backend with `USE_MOCK_SERVICES=true`.
-2. Start frontend.
-3. Open Voice Debug Console.
-4. Allow microphone access.
-5. Speak or submit the Thai demo transcript:
-
-   ```text
-   น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง
-   ```
-
-6. Confirm the debug state moves through `listening`, `speech`, `thinking`, and `speaking`.
-7. Open Live Cases and verify a new RED case appears without manual refresh.
-8. Open the case detail and verify:
-   - language is Thai
-   - incident includes flood and medical/breathing risk
-   - location includes Hat Yai
-   - triage is RED
-   - human review is required
-   - AI summary and triage reason are visible
-   - transcript and extracted evidence are visible
-9. Change status to `contacted`.
-10. Override priority in the UI and confirm the original AI reason remains visible.
-11. Generate a simulated upload link and verify it is clearly labeled as simulated.
-
-## Azure Mode Smoke Test
-
-After Azure credentials are configured:
+## Azure Speech/OpenAI Mode
 
 1. Set `USE_MOCK_SERVICES=false`.
-2. Configure the preferred voice provider:
-   - `AZURE_VOICE_LIVE_ENDPOINT` for Voice Live mode, or
-   - `AZURE_SPEECH_*` plus `AZURE_OPENAI_*` for Speech + OpenAI fallback.
-3. Configure Cosmos and SignalR values if available.
-4. Restart backend.
-5. Repeat the Thai demo flow.
-6. If any Azure provider fails, the app must show a recoverable provider error and fall back to mock mode when configured to do so.
+2. Configure:
+   - `AZURE_SPEECH_KEY`
+   - `AZURE_SPEECH_REGION`
+   - `AZURE_OPENAI_ENDPOINT`
+   - `AZURE_OPENAI_API_KEY`
+   - `AZURE_OPENAI_DEPLOYMENT`
+   - `AZURE_OPENAI_API_VERSION`
+3. Restart backend.
+4. Repeat the Thai transcript and local microphone tests.
+5. If credentials are incomplete, the system should report missing variables and fall back to mock provider when allowed.
 
-## Test Commands
+## Optional Azure Voice Live Mode
 
-Backend:
+1. Configure `AZURE_VOICE_LIVE_ENDPOINT` and `AZURE_VOICE_LIVE_MODEL`.
+2. Select the Voice Live provider in config or the debug console.
+3. Confirm the provider emits transcript or voice events.
+4. If Voice Live does not return structured triage directly, verify transcript is passed to Azure OpenAI triage.
+
+## Optional Cosmos Mode
+
+1. Configure all `COSMOS_DB_*` variables.
+2. Submit a case through `POST /api/cases`.
+3. Confirm the case is written to Cosmos.
+4. Remove credentials and confirm local repository fallback still works.
+
+## Required Test Commands
 
 ```powershell
-Set-Location backend
-.\.venv\Scripts\Activate.ps1
-pytest
+pytest tests/unit/test_safety_rules.py
+pytest tests/unit/test_triage_schema.py
+pytest tests/unit/test_vad_service.py
+pytest tests/unit/test_provider_fallback.py
+pytest tests/integration/test_thai_transcript_to_red_case.py
+pytest tests/integration/test_mock_local_mic_flow.py
 ```
 
-Frontend:
+## Manual Quality Gates
 
-```powershell
-Set-Location frontend
-npm test
-npm run lint
-```
-
-Browser workflow:
-
-```powershell
-Set-Location frontend
-npm run test:e2e
-```
-
-Required test coverage:
-
-- Unit test triage rules for RED, YELLOW, GREEN, low-confidence, and ambiguous cases.
-- Unit test local case repository create, read, update, list, and persistence.
-- Unit test VAD state transitions, silence threshold, pre-speech padding, and barge-in flag.
-- Integration test local microphone/WebSocket flow with mock provider.
-- Integration test structured extraction from the Thai flood and breathing-difficulty transcript.
-- Manual demo tests:
-  - Thai flood plus elderly breathing difficulty -> RED
-  - Minor property damage only -> GREEN
-  - Unclear noisy speech -> `human_review_required=true`
-  - Operator priority override
-  - Dashboard live update
-
-## Deployment Notes
-
-- Frontend target: Azure Static Web Apps.
-- Backend target: Azure Container Apps.
-- Database target: Azure Cosmos DB.
-- Realtime target: Azure SignalR Service with local WebSocket/SSE fallback.
-- Monitoring target: Application Insights.
-- Future secrets target: Azure Key Vault.
-- Telephony remains V1: define `TwilioMediaStreamAdapter` and `ACSCallAutomationAdapter`, but do not require them for V0.
+- App runs locally with mock mode.
+- App runs locally with Azure Speech/OpenAI credentials.
+- Local microphone creates a case.
+- RED safety cases are never downgraded.
+- Missing or uncertain information requires human review.
+- Phone provider integration is isolated behind adapters.

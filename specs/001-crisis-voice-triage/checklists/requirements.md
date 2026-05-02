@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Narayana AI Voice Intake
+# Specification Quality Checklist: Narayana AI Azure Voice Gateway
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-05-02  
@@ -31,5 +31,5 @@
 
 ## Notes
 
-- Validation pass 1 completed on 2026-05-02: all checklist items pass.
-- Microsoft Azure, Twilio, and Azure Communication Services references are captured only as explicit hackathon or V0 scope constraints, not as design-level implementation instructions.
+- Validation pass 3 completed on 2026-05-02 after aligning low-confidence review threshold to 0.75 and regenerating gateway-focused plan artifacts: all checklist items pass.
+- Named services and phone providers are retained in the specification because they define V0 scope boundaries and required/future input modes.
