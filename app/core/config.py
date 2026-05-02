@@ -29,6 +29,17 @@ class Settings:
     case_store_path: str = ".data/cases.json"
     audio_store_path: str = ".data/audio"
     low_confidence_threshold: float = 0.75
+    voice_input_mode: str = "local_mic"
+    telephony_provider: str = "none"
+    phone_test_country: str = ""
+    phone_test_number: str = ""
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_phone_number: str = ""
+    twilio_webhook_public_base_url: str = ""
+    acs_connection_string: str = ""
+    acs_phone_number: str = ""
+    acs_callback_public_base_url: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -49,6 +60,17 @@ class Settings:
             case_store_path=os.getenv("CASE_STORE_PATH", ".data/cases.json"),
             audio_store_path=os.getenv("AUDIO_STORE_PATH", ".data/audio"),
             low_confidence_threshold=float(os.getenv("LOW_CONFIDENCE_THRESHOLD", "0.75")),
+            voice_input_mode=os.getenv("VOICE_INPUT_MODE", "local_mic"),
+            telephony_provider=os.getenv("TELEPHONY_PROVIDER", "none"),
+            phone_test_country=os.getenv("PHONE_TEST_COUNTRY", ""),
+            phone_test_number=os.getenv("PHONE_TEST_NUMBER", ""),
+            twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
+            twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
+            twilio_phone_number=os.getenv("TWILIO_PHONE_NUMBER", ""),
+            twilio_webhook_public_base_url=os.getenv("TWILIO_WEBHOOK_PUBLIC_BASE_URL", ""),
+            acs_connection_string=os.getenv("ACS_CONNECTION_STRING", ""),
+            acs_phone_number=os.getenv("ACS_PHONE_NUMBER", ""),
+            acs_callback_public_base_url=os.getenv("ACS_CALLBACK_PUBLIC_BASE_URL", ""),
         )
 
     @property
@@ -80,6 +102,14 @@ class Settings:
             and self.cosmos_db_database
             and self.cosmos_db_container
         )
+
+    @property
+    def twilio_configured(self) -> bool:
+        return bool(self.twilio_webhook_public_base_url)
+
+    @property
+    def acs_configured(self) -> bool:
+        return bool(self.acs_connection_string and self.acs_phone_number and self.acs_callback_public_base_url)
 
     @property
     def selected_provider(self) -> str:

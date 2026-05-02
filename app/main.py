@@ -3,9 +3,11 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes_acs import router as acs_router
 from app.api.routes_audio import router as audio_router
 from app.api.routes_cases import router as cases_router
 from app.api.routes_triage import router as triage_router
+from app.api.routes_twilio import router as twilio_router
 
 
 def create_app() -> FastAPI:
@@ -24,6 +26,8 @@ def create_app() -> FastAPI:
     app.include_router(audio_router)
     app.include_router(triage_router)
     app.include_router(cases_router)
+    app.include_router(twilio_router)
+    app.include_router(acs_router)
     return app
 
 

@@ -9,10 +9,11 @@ This project is not an official emergency hotline replacement and does not dispa
 - Backend: FastAPI in `app/`
 - Frontend: Next.js debug console in `frontend/`
 - V1 input: local browser microphone and manual transcript
+- V1 telephony spike: Twilio Media Stream ingress can be simulated locally and tested with a foreign-country test number when available
 - V1 AI path: mock provider by default, Azure Speech + Azure OpenAI when configured
 - Audio artifacts: committed local microphone turns are written to `.data/audio/{session_id}/{turn_id}.wav`
 - Storage: local JSON by default, Cosmos DB when configured
-- Future adapters: Twilio Media Stream and Azure Communication Services interfaces only
+- Future adapter: Azure Communication Services remains a disabled skeleton until explicitly implemented
 
 ## Local Setup
 
@@ -187,11 +188,59 @@ The UI shows VAD state as `silence`, `speech`, `listening`, `thinking`, or `spea
 
 On each committed local microphone turn, the backend writes a WAV file under `.data/audio/{session_id}/{turn_id}.wav` and includes that path in the WebSocket `triage.case.created` message as `audio_ref`.
 
+## Twilio Foreign-Number Spike
+
+Local microphone remains the default path. To validate phone ingress with a foreign-country Twilio test number, expose the backend through a public HTTPS tunnel or deployment and set:
+
+```dotenv
+VOICE_INPUT_MODE=twilio_call
+TELEPHONY_PROVIDER=twilio
+PHONE_TEST_COUNTRY=US
+PHONE_TEST_NUMBER=+15551234567
+TWILIO_ACCOUNT_SID=...
+TWILIO_AUTH_TOKEN=...
+TWILIO_PHONE_NUMBER=+15557654321
+TWILIO_WEBHOOK_PUBLIC_BASE_URL=https://example.ngrok-free.app
+```
+
+Configure the Twilio voice webhook for the test number:
+
+```text
+POST https://example.ngrok-free.app/api/telephony/twilio/incoming-call
+```
+
+When configured, the webhook returns TwiML that connects the call to:
+
+```text
+wss://example.ngrok-free.app/ws/telephony/twilio/{call_id}
+```
+
+The Twilio media WebSocket decodes base64 G.711 mu-law 8 kHz frames into PCM16 mono `AudioFrame` objects, then reuses the same VAD, `AudioBufferService`, voice provider, safety rules, and case repository used by `/ws/local-audio`.
+
+Offline validation does not require Twilio credentials:
+
+```powershell
+pytest tests/unit/test_twilio_audio_service.py tests/unit/test_twilio_routes.py tests/integration/test_twilio_media_flow.py
+```
+
+## ACS Skeleton
+
+ACS routes are present only as disabled placeholders:
+
+```text
+POST /api/telephony/acs/events
+WS   /ws/telephony/acs/{call_id}
+```
+
+Without ACS implementation/configuration they return a clear not-implemented response and do not create cases or process audio.
+
 ## Phone Provider Limitations
 
-Twilio and Azure Communication Services are V1 work. V0 intentionally does not require real phone numbers because Thailand number support, trial-account restrictions, inbound call setup, and compliance requirements must be validated separately.
+The Twilio foreign-number spike validates call ingress only. It does not validate Thailand phone-number availability, Thailand SMS support, local telecom cost, carrier behavior, production authentication, emergency-service compliance, or dispatch readiness.
 
-The code includes disabled adapter placeholders:
+Narayana remains a crisis intake and triage assistant. It does not send real SMS, does not dispatch rescue automatically, and is not an official emergency hotline replacement.
+
+The code still includes adapter placeholders:
 
 - `TwilioMediaStreamAdapter`
 - `ACSAudioStreamAdapter`

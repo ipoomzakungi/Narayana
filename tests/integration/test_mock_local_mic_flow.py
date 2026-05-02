@@ -46,7 +46,10 @@ def test_mock_local_mic_flow_creates_case(tmp_path, monkeypatch) -> None:
 
     with client.websocket_connect("/ws/local-audio") as websocket:
         websocket.send_json({"type": "session.start", "session_id": "session_ws"})
-        assert websocket.receive_json()["type"] == "session.started"
+        start_message = websocket.receive_json()
+        assert start_message["type"] == "session.started"
+        assert start_message["provider_mode"] == "mock"
+        assert "source_input_mode" not in start_message
 
         websocket.send_json(frame(1, 24000))
         for sequence in range(2, 41):
@@ -80,6 +83,8 @@ def test_mock_local_mic_flow_creates_case(tmp_path, monkeypatch) -> None:
     case_message = case_messages[0]
     assert case_message["provider_mode"] == "mock"
     assert case_message["transcript_source"] == "mock"
+    assert "source_input_mode" not in case_message
+    assert "call_metadata" not in case_message
     assert case_message["warnings"] == []
     assert case_message["transcript"]
     assert case_message["record"]["case"]["triage_level"] == "RED"

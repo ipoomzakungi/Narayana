@@ -117,7 +117,18 @@ describe("VoiceDebugConsole", () => {
         type: "session.started",
         session_id: "session_1",
         provider_mode: "azure_speech_openai",
-        state: "listening"
+        state: "listening",
+        source_input_mode: "twilio_call",
+        call_metadata: {
+          provider: "twilio",
+          call_id: "CA123",
+          from_number: "+15550001111",
+          to_number: "+15552223333",
+          country: "US",
+          codec: "mulaw",
+          sample_rate: 8000,
+          started_at: "2026-05-02T00:00:00Z"
+        }
       });
       mocks.lastWsOptions?.onMessage({
         type: "triage.case.created",
@@ -128,6 +139,17 @@ describe("VoiceDebugConsole", () => {
         audio_ref: ".data/audio/session_1/turn_1.wav",
         response_text: null,
         warnings: ["Azure Speech did not return a usable transcript."],
+        source_input_mode: "twilio_call",
+        call_metadata: {
+          provider: "twilio",
+          call_id: "CA123",
+          from_number: "+15550001111",
+          to_number: "+15552223333",
+          country: "US",
+          codec: "mulaw",
+          sample_rate: 8000,
+          started_at: "2026-05-02T00:00:00Z"
+        },
         record: {
           case: {
             ...triage,
@@ -149,5 +171,12 @@ describe("VoiceDebugConsole", () => {
     expect(screen.getAllByText("fallback").length).toBeGreaterThan(0);
     expect(screen.getByText(".data/audio/session_1/turn_1.wav")).toBeInTheDocument();
     expect(screen.getAllByText("Azure Speech did not return a usable transcript.").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("twilio_call").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("twilio").length).toBeGreaterThan(0);
+    expect(screen.getByText("CA123")).toBeInTheDocument();
+    expect(screen.getByText("+15550001111")).toBeInTheDocument();
+    expect(screen.getByText("+15552223333")).toBeInTheDocument();
+    expect(screen.getByText("US")).toBeInTheDocument();
+    expect(screen.getByText("mulaw / 8000 Hz")).toBeInTheDocument();
   });
 });

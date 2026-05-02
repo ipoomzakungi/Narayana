@@ -6,15 +6,10 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
 
 from app.core.config import Settings, get_settings
-from app.models.audio import AudioDebugEvent, AudioDebugEventType, AudioFrame, VadState
-from app.models.case import CrisisCase
+from app.models.audio import AudioFrame, VadState
 from app.models.triage import AzureHealth, ProviderMode
-from app.services.audio_buffer_service import AudioBufferError, AudioBufferService
 from app.services.audio_frame_service import AudioFrameError
-from app.services.case_repository import get_case_repository
-from app.services.safety_rules import apply_safety_rules
-from app.services.turn_manager import TurnManager
-from app.services.voice_agent_provider import get_voice_provider
+from app.services.audio_session_processor import AudioSessionProcessor
 
 router = APIRouter(tags=["audio"])
 
@@ -23,10 +18,6 @@ class SessionStart(BaseModel):
     type: str
     session_id: str | None = None
     provider_mode: ProviderMode | None = None
-
-
-def _event_payload(event: AudioDebugEvent) -> dict:
-    return {"type": "debug.event", "event": event.model_dump(mode="json")}
 
 
 @router.get("/api/health/azure", response_model=AzureHealth)
@@ -58,9 +49,7 @@ async def local_audio_ws(websocket: WebSocket) -> None:
     settings = get_settings()
     session_id = f"session_{uuid4().hex[:12]}"
     requested_mode: ProviderMode | None = None
-    manager = TurnManager()
-    audio_buffer = AudioBufferService(settings.audio_store_path)
-    debug_events: list[AudioDebugEvent] = []
+    processor = AudioSessionProcessor(settings=settings, session_id=session_id)
 
     try:
         while True:
@@ -71,6 +60,11 @@ async def local_audio_ws(websocket: WebSocket) -> None:
                 start = SessionStart.model_validate(raw)
                 session_id = start.session_id or session_id
                 requested_mode = start.provider_mode
+                processor = AudioSessionProcessor(
+                    settings=settings,
+                    session_id=session_id,
+                    requested_mode=requested_mode,
+                )
                 await websocket.send_json(
                     {
                         "type": "session.started",
@@ -82,29 +76,11 @@ async def local_audio_ws(websocket: WebSocket) -> None:
                 continue
 
             if message_type == "assistant.playback.started":
-                manager.set_speaking(True)
-                await websocket.send_json(
-                    _event_payload(
-                        AudioDebugEvent(
-                            session_id=session_id,
-                            event_type=AudioDebugEventType.AI_RESPONSE_STARTED,
-                            state=VadState.SPEAKING,
-                        )
-                    )
-                )
+                await websocket.send_json(processor.assistant_playback_started())
                 continue
 
             if message_type == "assistant.playback.completed":
-                manager.set_speaking(False)
-                await websocket.send_json(
-                    _event_payload(
-                        AudioDebugEvent(
-                            session_id=session_id,
-                            event_type=AudioDebugEventType.AI_RESPONSE_COMPLETED,
-                            state=VadState.LISTENING,
-                        )
-                    )
-                )
+                await websocket.send_json(processor.assistant_playback_completed())
                 continue
 
             if message_type == "session.close":
@@ -118,76 +94,11 @@ async def local_audio_ws(websocket: WebSocket) -> None:
 
             try:
                 frame = AudioFrame.model_validate({**raw, "session_id": raw.get("session_id") or session_id})
-                result = manager.process_frame(frame)
-                speech_started = any(
-                    event.event_type == AudioDebugEventType.VAD_SPEECH_START for event in result.events
-                )
-                audio_buffer.observe_frame(frame, speech_started=speech_started)
-            except (ValidationError, AudioFrameError, AudioBufferError, ValueError) as exc:
+            except (ValidationError, AudioFrameError, ValueError) as exc:
                 await websocket.send_json({"type": "error", "detail": str(exc)})
                 continue
 
-            audio_warnings: list[str] = []
-            if result.committed_turn is not None:
-                try:
-                    audio_result = audio_buffer.write_committed_turn(result.committed_turn)
-                    result.committed_turn.audio_ref = audio_result.audio_ref
-                    result.committed_turn.audio_debug_id = audio_result.audio_debug_id
-                    for event in result.events:
-                        if event.event_type == AudioDebugEventType.TURN_COMMITTED:
-                            event.metadata.update(
-                                {
-                                    "audio_ref": audio_result.audio_ref,
-                                    "audio_debug_id": audio_result.audio_debug_id,
-                                    "audio_frame_count": audio_result.frame_count,
-                                }
-                            )
-                except AudioBufferError as exc:
-                    audio_warnings.append(f"Audio turn could not be saved: {exc}")
-                    for event in result.events:
-                        if event.event_type == AudioDebugEventType.TURN_COMMITTED:
-                            event.metadata["audio_error"] = str(exc)
-
-            debug_events.extend(result.events)
-            for event in result.events:
-                await websocket.send_json(_event_payload(event))
-
-            if result.committed_turn is None:
-                continue
-
-            provider = get_voice_provider(settings, requested_mode)
-            await websocket.send_json(
-                _event_payload(
-                    AudioDebugEvent(
-                        session_id=session_id,
-                        event_type=AudioDebugEventType.AI_REQUEST_STARTED,
-                        state=VadState.THINKING,
-                        metadata={"turn_id": result.committed_turn.turn_id},
-                    )
-                )
-            )
-            provider_result = await provider.process_turn(result.committed_turn)
-            safe_triage = apply_safety_rules(provider_result.triage, settings.low_confidence_threshold)
-            case = CrisisCase.model_validate(safe_triage.model_dump())
-            repository = get_case_repository(settings)
-            record = await repository.create(
-                case=case,
-                session_id=session_id,
-                source_provider=provider_result.provider_mode,
-                debug_event_count=len(debug_events),
-            )
-            await websocket.send_json(
-                {
-                    "type": "triage.case.created",
-                    "session_id": session_id,
-                    "transcript": provider_result.transcript,
-                    "provider_mode": provider_result.provider_mode.value,
-                    "transcript_source": provider_result.transcript_source,
-                    "audio_ref": provider_result.audio_ref or result.committed_turn.audio_ref,
-                    "response_text": provider_result.response_text,
-                    "warnings": [*audio_warnings, *provider_result.provider_warnings],
-                    "record": record.model_dump(mode="json"),
-                }
-            )
+            for payload in await processor.process_frame(frame):
+                await websocket.send_json(payload)
     except WebSocketDisconnect:
         return

@@ -4,6 +4,19 @@ export type TriageLevel = "RED" | "YELLOW" | "GREEN";
 export type CaseStatus = "pending" | "contacted" | "dispatched" | "resolved" | "closed";
 export type VadState = "silence" | "speech" | "listening" | "thinking" | "speaking";
 export type TranscriptSource = "mock" | "azure_speech_stt" | "fallback";
+export type SourceInputMode = "local_mic" | "twilio_call" | "acs_call";
+
+export interface CallMetadata {
+  provider: "none" | "twilio" | "acs";
+  call_id: string;
+  from_number: string | null;
+  to_number: string | null;
+  country: string | null;
+  codec: "mulaw" | "pcm16" | "unknown";
+  sample_rate: number;
+  started_at: string;
+  raw_provider_payload?: Record<string, unknown> | null;
+}
 
 export interface TriageResult {
   case_id: string;
@@ -45,7 +58,14 @@ export interface AudioDebugEvent {
 }
 
 export type VoiceWsMessage =
-  | { type: "session.started"; session_id: string; provider_mode: ProviderMode; state: VadState }
+  | {
+      type: "session.started";
+      session_id: string;
+      provider_mode: ProviderMode;
+      state: VadState;
+      source_input_mode?: SourceInputMode;
+      call_metadata?: CallMetadata;
+    }
   | { type: "debug.event"; event: AudioDebugEvent }
   | {
       type: "triage.case.created";
@@ -57,6 +77,8 @@ export type VoiceWsMessage =
       response_text: string | null;
       warnings: string[];
       record: CaseRepositoryRecord;
+      source_input_mode?: SourceInputMode;
+      call_metadata?: CallMetadata;
     }
   | { type: "error"; detail: string }
   | { type: "session.closed"; session_id: string };

@@ -5,7 +5,16 @@ import React, { useRef, useState } from "react";
 import { startMicStreaming } from "@/lib/audio-client";
 import { createCase, triageFromTranscript } from "@/lib/triage-api-client";
 import { createVoiceWsClient, type VoiceWsClient } from "@/lib/voice-ws-client";
-import type { AudioDebugEvent, CaseRepositoryRecord, TranscriptSource, TriageResult, VadState, VoiceWsMessage } from "@/types/triage";
+import type {
+  AudioDebugEvent,
+  CallMetadata,
+  CaseRepositoryRecord,
+  SourceInputMode,
+  TranscriptSource,
+  TriageResult,
+  VadState,
+  VoiceWsMessage
+} from "@/types/triage";
 
 const SAMPLE_TRANSCRIPT = "น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง";
 
@@ -34,6 +43,8 @@ export function VoiceDebugConsole() {
   const [transcriptSource, setTranscriptSource] = useState<TranscriptSource | "manual">("manual");
   const [audioRef, setAudioRef] = useState<string | null>(null);
   const [providerWarnings, setProviderWarnings] = useState<string[]>([]);
+  const [sourceInputMode, setSourceInputMode] = useState<SourceInputMode | null>(null);
+  const [callMetadata, setCallMetadata] = useState<CallMetadata | null>(null);
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +63,8 @@ export function VoiceDebugConsole() {
       setTranscriptSource("manual");
       setAudioRef(null);
       setProviderWarnings([]);
+      setSourceInputMode(null);
+      setCallMetadata(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create case");
     } finally {
@@ -63,6 +76,8 @@ export function VoiceDebugConsole() {
     if (message.type === "session.started") {
       setProviderMode(message.provider_mode);
       setVadState(message.state);
+      setSourceInputMode(message.source_input_mode ?? null);
+      setCallMetadata(message.call_metadata ?? null);
       return;
     }
     if (message.type === "debug.event") {
@@ -78,6 +93,8 @@ export function VoiceDebugConsole() {
       setTranscriptSource(message.transcript_source);
       setAudioRef(message.audio_ref);
       setProviderWarnings(message.warnings);
+      setSourceInputMode(message.source_input_mode ?? null);
+      setCallMetadata(message.call_metadata ?? null);
       setVadState("listening");
       return;
     }
@@ -91,6 +108,8 @@ export function VoiceDebugConsole() {
     setEvents([]);
     setProviderWarnings([]);
     setAudioRef(null);
+    setSourceInputMode(null);
+    setCallMetadata(null);
     const sessionId = `session_${Date.now()}`;
     const client = createVoiceWsClient({
       sessionId,
@@ -163,6 +182,10 @@ export function VoiceDebugConsole() {
                 <dd className="font-medium">{providerMode}</dd>
               </div>
               <div className="grid grid-cols-[110px_1fr] gap-2">
+                <dt className="text-slate-500">Input</dt>
+                <dd className="font-medium">{sourceInputMode ?? "local_mic"}</dd>
+              </div>
+              <div className="grid grid-cols-[110px_1fr] gap-2">
                 <dt className="text-slate-500">Transcript</dt>
                 <dd className="font-medium">{transcriptSource}</dd>
               </div>
@@ -200,6 +223,39 @@ export function VoiceDebugConsole() {
                   <li key={warning}>{warning}</li>
                 ))}
               </ul>
+            </div>
+          ) : null}
+          {callMetadata ? (
+            <div className="mt-4 border border-command-line bg-command-panel p-3 text-xs text-slate-700">
+              <h2 className="text-sm font-semibold text-slate-950">Call Metadata</h2>
+              <dl className="mt-2 grid gap-2">
+                <div className="grid grid-cols-[90px_1fr] gap-2">
+                  <dt className="text-slate-500">Provider</dt>
+                  <dd className="font-medium">{callMetadata.provider}</dd>
+                </div>
+                <div className="grid grid-cols-[90px_1fr] gap-2">
+                  <dt className="text-slate-500">Call ID</dt>
+                  <dd className="break-all font-medium">{callMetadata.call_id}</dd>
+                </div>
+                <div className="grid grid-cols-[90px_1fr] gap-2">
+                  <dt className="text-slate-500">From</dt>
+                  <dd className="font-medium">{callMetadata.from_number ?? "-"}</dd>
+                </div>
+                <div className="grid grid-cols-[90px_1fr] gap-2">
+                  <dt className="text-slate-500">To</dt>
+                  <dd className="font-medium">{callMetadata.to_number ?? "-"}</dd>
+                </div>
+                <div className="grid grid-cols-[90px_1fr] gap-2">
+                  <dt className="text-slate-500">Country</dt>
+                  <dd className="font-medium">{callMetadata.country ?? "-"}</dd>
+                </div>
+                <div className="grid grid-cols-[90px_1fr] gap-2">
+                  <dt className="text-slate-500">Codec</dt>
+                  <dd className="font-medium">
+                    {callMetadata.codec} / {callMetadata.sample_rate} Hz
+                  </dd>
+                </div>
+              </dl>
             </div>
           ) : null}
         </section>
