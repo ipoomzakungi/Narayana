@@ -233,53 +233,120 @@ The backend container runs:
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Build locally:
+### GHCR Image Build
 
-```powershell
-docker build -t narayana-backend:local .
+This Azure subscription blocks Azure Container Registry Tasks, so the Narayana demo path avoids Azure-side image builds. Do not use `az acr build` or `az containerapp up --source` for this deployment. The backend image is built by GitHub Actions and pushed to GitHub Container Registry instead:
+
+```text
+ghcr.io/ipoomzakungi/narayana-backend:latest
 ```
 
-Run locally in mock Twilio mode:
+The workflow is:
 
-```powershell
-docker run --rm -p 8000:8000 `
-  -e USE_MOCK_SERVICES=true `
-  -e VOICE_INPUT_MODE=twilio_call `
-  -e TELEPHONY_PROVIDER=twilio `
-  -e TWILIO_PHONE_NUMBER=+16082005400 `
-  -e TWILIO_WEBHOOK_PUBLIC_BASE_URL=http://localhost:8000 `
-  narayana-backend:local
+```text
+.github/workflows/publish-backend-ghcr.yml
 ```
 
-Deployment variables:
+It runs on every push to `main` and can also be started manually:
+
+1. Open the repository on GitHub.
+2. Go to **Actions**.
+3. Select **Publish backend image to GHCR**.
+4. Choose **Run workflow** on `main`.
+5. Wait for the image push to complete.
+
+Check the package under GitHub Packages for `ipoomzakungi/Narayana`, or open the personal package list for `ipoomzakungi` and look for `narayana-backend`.
+
+If Azure Container Apps cannot pull the image, make the GHCR package public:
+
+1. Open the `narayana-backend` package page in GitHub.
+2. Open **Package settings**.
+3. Under visibility, choose **Change visibility**.
+4. Select **Public** and confirm.
+
+Alternatively, keep the package private and provide `GHCR_USERNAME` plus `GHCR_PAT` with package read permission when running the deploy script. Do not commit those values.
+
+### Deploy GHCR Image to Azure Container Apps
+
+Deploy in mock Twilio mode after the GHCR image exists:
 
 ```powershell
 $env:AZURE_RESOURCE_GROUP="rg-narayana-demo"
 $env:AZURE_LOCATION="southeastasia"
 $env:AZURE_CONTAINER_APP_NAME="narayana-api"
 $env:AZURE_CONTAINER_ENV_NAME="narayana-env"
-$env:AZURE_REGISTRY_NAME="narayanaregistry"
-$env:AZURE_IMAGE_NAME="narayana-backend:latest"
+$env:GHCR_IMAGE="ghcr.io/ipoomzakungi/narayana-backend:latest"
 $env:USE_MOCK_SERVICES="true"
 $env:VOICE_INPUT_MODE="twilio_call"
 $env:TELEPHONY_PROVIDER="twilio"
 $env:TWILIO_PHONE_NUMBER="+16082005400"
-$env:TWILIO_WEBHOOK_PUBLIC_BASE_URL="https://<container-app-url>"
+$env:TWILIO_WEBHOOK_PUBLIC_BASE_URL="https://placeholder"
+
+.\scripts\azure_container_apps_deploy_ghcr.ps1
 ```
 
-Deploy or print fallback commands:
+The script:
 
-```powershell
-.\scripts\azure_container_apps_deploy.ps1
+- verifies Azure CLI login
+- creates or reuses `rg-narayana-demo`
+- creates or reuses the `narayana-env` Container Apps environment
+- creates or updates `narayana-api`
+- uses external ingress on port `8000`
+- deploys `ghcr.io/ipoomzakungi/narayana-backend:latest`
+- keeps `USE_MOCK_SERVICES=true`
+- fetches the real Container App FQDN
+- updates `TWILIO_WEBHOOK_PUBLIC_BASE_URL=https://<real-fqdn>`
+- prints the final Twilio webhook URL
+
+Expected final webhook format:
+
+```text
+https://<real-fqdn>/api/telephony/twilio/incoming-call
 ```
 
-The script validates required values, prefers `az containerapp up` when available, and otherwise prints `az acr build` / `az containerapp create` fallback commands. Secrets stay outside the image; `.env`, `.env.*`, and `.data/` are excluded by `.dockerignore`.
+### Test the Deployed Backend
 
-After deployment, set:
+After deployment, read the FQDN and set local test variables:
 
 ```powershell
-$env:AZURE_CONTAINER_APP_URL="https://<container-app-url>"
-$env:TWILIO_WEBHOOK_PUBLIC_BASE_URL="https://<container-app-url>"
+$fqdn = az containerapp show `
+  --name narayana-api `
+  --resource-group rg-narayana-demo `
+  --query properties.configuration.ingress.fqdn `
+  -o tsv
+
+$env:AZURE_CONTAINER_APP_URL="https://$fqdn"
+$env:TWILIO_WEBHOOK_PUBLIC_BASE_URL="https://$fqdn"
+```
+
+Health check:
+
+```powershell
+Invoke-RestMethod "$env:TWILIO_WEBHOOK_PUBLIC_BASE_URL/api/health/azure"
+```
+
+Fake Twilio webhook POST:
+
+```powershell
+$response = Invoke-WebRequest `
+  -Method Post `
+  -Uri "$env:TWILIO_WEBHOOK_PUBLIC_BASE_URL/api/telephony/twilio/incoming-call" `
+  -ContentType "application/x-www-form-urlencoded" `
+  -Body @{
+    CallSid = "CA_TEST"
+    From = "+66800000000"
+    To = "+16082005400"
+    FromCountry = "TH"
+  }
+
+$response.Content
+```
+
+Verify the TwiML contains:
+
+```text
+wss://
+/ws/telephony/twilio/CA_TEST
 ```
 
 ## Public Webhook Check
