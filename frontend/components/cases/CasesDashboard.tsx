@@ -36,9 +36,16 @@ function SummaryTile({ label, value, tone }: { label: string; value: number; ton
   );
 }
 
+function intakeSummary(record: CaseRepositoryRecord) {
+  return record.conversation_summary ?? record.case.conversation_summary ?? record.case.ai_summary;
+}
+
 function CaseRow({ record }: { record: CaseRepositoryRecord }) {
+  const caseGroup = record.case_group ?? record.case.case_group ?? "-";
+  const recommendedTeam = record.recommended_team ?? record.case.recommended_team ?? "-";
+
   return (
-    <article className="grid gap-3 border border-command-line bg-white p-4 shadow-sm xl:grid-cols-[96px_120px_minmax(140px,1fr)_minmax(240px,2fr)_110px_130px]">
+    <article className="grid gap-3 border border-command-line bg-white p-4 shadow-sm xl:grid-cols-[96px_120px_140px_minmax(140px,1fr)_minmax(240px,2fr)_110px_130px]">
       <div>
         <span className={`inline-flex min-w-16 justify-center px-2 py-1 text-xs font-semibold ${triageClass(record.case.triage_level)}`}>
           {record.case.triage_level}
@@ -49,12 +56,17 @@ function CaseRow({ record }: { record: CaseRepositoryRecord }) {
         <p className="mt-1 text-sm font-semibold text-slate-950">{record.case.incident_type}</p>
       </div>
       <div>
+        <p className="text-xs text-slate-500">Group</p>
+        <p className="mt-1 text-sm font-semibold text-slate-950">{caseGroup}</p>
+        <p className="mt-2 text-xs text-slate-500">{recommendedTeam}</p>
+      </div>
+      <div>
         <p className="text-xs text-slate-500">Location</p>
         <p className="mt-1 text-sm font-medium text-slate-800">{record.case.location_text || "-"}</p>
       </div>
       <div>
-        <p className="text-xs text-slate-500">AI Summary</p>
-        <p className="mt-1 text-sm text-slate-800">{record.case.ai_summary}</p>
+        <p className="text-xs text-slate-500">Summary</p>
+        <p className="mt-1 text-sm text-slate-800">{intakeSummary(record)}</p>
         <p className="mt-2 text-xs text-slate-500">
           {record.source_provider} {record.session_id ? `/ ${record.session_id}` : ""}
         </p>

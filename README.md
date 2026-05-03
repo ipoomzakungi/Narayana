@@ -70,6 +70,72 @@ Invoke-RestMethod -Method Post `
   -Body '{"transcript":"น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง","language_hint":"th"}'
 ```
 
+## Multi-Turn Conversation Intake
+
+The multi-turn intake layer is additive. The existing one-shot route remains available:
+
+```text
+POST /api/triage/from-transcript
+```
+
+The conversation-aware route is:
+
+```text
+POST /api/intake/from-transcript
+```
+
+It keeps in-memory session state for local V0 demos, stores caller and assistant turns, updates collected fields, asks one concise Thai follow-up question when critical details are missing, and creates or escalates a case immediately when deterministic RED guardrails match.
+
+Example incomplete intake:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri http://localhost:8000/api/intake/from-transcript `
+  -ContentType application/json `
+  -Body '{"session_id":"debug-session","transcript":"น้ำท่วมอยู่ที่หาดใหญ่","language_hint":"th","source_input_mode":"manual"}'
+```
+
+Expected:
+
+- `action=ask_followup`
+- `response_text` contains one short Thai question
+- `partial_state.conversation_turns` includes caller and assistant turns
+- `created_case=null`
+
+Example RED escalation:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri http://localhost:8000/api/intake/from-transcript `
+  -ContentType application/json `
+  -Body '{"session_id":"red-session","transcript":"น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง","language_hint":"th","source_input_mode":"manual"}'
+```
+
+Expected:
+
+- `action=escalate_human_review`
+- `triage_level=RED`
+- `human_review_required=true`
+- `case_group=rescue`
+- `recommended_team=rescue`
+- `created_case` is present
+
+Twilio/local-audio integration is feature-gated and stays disabled by default:
+
+```dotenv
+ENABLE_MULTI_TURN_INTAKE=false
+ASSISTANT_LANGUAGE=th
+ASSISTANT_TONE=calm_concise
+ASSISTANT_MAX_FOLLOWUPS=3
+ASSISTANT_QUESTION_STYLE=single_short_question
+ASSISTANT_NAME=Narayana
+ASSISTANT_RESPONSE_MAX_CHARS=180
+```
+
+When `ENABLE_MULTI_TURN_INTAKE=true`, committed phone/local audio transcripts are routed through the intake orchestrator. `ask_followup` emits an `intake.followup` WebSocket payload with `response_text`; `create_case` and `escalate_human_review` continue to emit `triage.case.created` with additive intake metadata.
+
+This feature does not add spoken TTS audio back to Twilio, SMS, ACS production behavior, Cosmos DB resources, emergency dispatch, or automatic case closure/rejection.
+
 ## Azure Setup
 
 Set these values in `.env` and switch mock mode off:

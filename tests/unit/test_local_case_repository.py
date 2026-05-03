@@ -45,6 +45,30 @@ async def test_create_get_and_persist_local_case(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_case_repository_persists_optional_intake_metadata(tmp_path) -> None:
+    repository = LocalCaseRepository(str(tmp_path / "cases.json"))
+    case = make_case()
+
+    await repository.create(
+        case,
+        session_id="session_1",
+        source_provider=ProviderMode.MOCK,
+        case_group="rescue",
+        recommended_team="rescue",
+        conversation_summary="Caller reported flood.",
+        intake_session_id="session_1",
+        intake_audit=[{"action": "escalate_human_review"}],
+    )
+    loaded = await repository.get(case.case_id)
+
+    assert loaded is not None
+    assert loaded.case_group == "rescue"
+    assert loaded.recommended_team == "rescue"
+    assert loaded.conversation_summary == "Caller reported flood."
+    assert loaded.intake_audit == [{"action": "escalate_human_review"}]
+
+
+@pytest.mark.asyncio
 async def test_missing_case_returns_none(tmp_path) -> None:
     repository = LocalCaseRepository(str(tmp_path / "cases.json"))
 

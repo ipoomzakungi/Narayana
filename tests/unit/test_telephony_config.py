@@ -10,6 +10,10 @@ def test_telephony_defaults_keep_local_mic_and_no_provider() -> None:
 
     assert settings.voice_input_mode == "local_mic"
     assert settings.telephony_provider == "none"
+    assert settings.enable_multi_turn_intake is False
+    assert settings.assistant_language == "th"
+    assert settings.assistant_max_followups == 3
+    assert settings.assistant_name == "Narayana"
     assert settings.twilio_configured is False
     assert settings.acs_configured is False
 

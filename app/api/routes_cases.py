@@ -23,6 +23,11 @@ async def create_case(
         case=safe_case,
         session_id=request.session_id,
         source_provider=request.source_provider,
+        case_group=request.case_group,
+        recommended_team=request.recommended_team,
+        conversation_summary=request.conversation_summary,
+        intake_session_id=request.intake_session_id,
+        intake_audit=request.intake_audit,
     )
 
 

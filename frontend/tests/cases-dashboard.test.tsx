@@ -37,7 +37,10 @@ const snapshot: CaseSnapshotResponse = {
       session_id: "twilio_CA_TEST",
       source_provider: "mock",
       debug_event_count: 4,
-      stored_at: "2026-05-03T06:00:02Z"
+      stored_at: "2026-05-03T06:00:02Z",
+      case_group: "rescue",
+      recommended_team: "rescue",
+      conversation_summary: "Caller reported flood in Hat Yai with trapped elderly person."
     }
   ]
 };
@@ -54,8 +57,9 @@ describe("CasesDashboard", () => {
 
     render(<CasesDashboard />);
 
-    await waitFor(() => expect(screen.getByText("Flood with trapped elderly person.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Caller reported flood in Hat Yai with trapped elderly person.")).toBeInTheDocument());
     expect(screen.getAllByText("RED").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("rescue").length).toBeGreaterThan(0);
     expect(screen.getByText("หาดใหญ่")).toBeInTheDocument();
     expect(screen.getByText("pending")).toBeInTheDocument();
     expect(screen.getByText("required")).toBeInTheDocument();
@@ -65,5 +69,30 @@ describe("CasesDashboard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("renders older records without intake fields", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ...snapshot,
+          cases: [
+            {
+              case: redCase,
+              session_id: "session_old",
+              source_provider: "mock",
+              debug_event_count: 1,
+              stored_at: "2026-05-03T06:00:02Z"
+            }
+          ]
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    render(<CasesDashboard />);
+
+    await waitFor(() => expect(screen.getByText("Flood with trapped elderly person.")).toBeInTheDocument());
+    expect(screen.getByText("mock / session_old")).toBeInTheDocument();
   });
 });

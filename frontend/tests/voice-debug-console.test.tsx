@@ -179,4 +179,142 @@ describe("VoiceDebugConsole", () => {
     expect(screen.getByText("US")).toBeInTheDocument();
     expect(screen.getByText("mulaw / 8000 Hz")).toBeInTheDocument();
   });
+
+  it("submits manual transcript to intake and renders follow-up state", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          session_id: "debug-session",
+          action: "ask_followup",
+          response_text: "มีใครบาดเจ็บหรือหายใจลำบากไหมคะ?",
+          partial_state: {
+            session_id: "debug-session",
+            source_input_mode: "manual",
+            conversation_turns: [
+              {
+                speaker: "caller",
+                text: "น้ำท่วมอยู่ที่หาดใหญ่",
+                created_at: "2026-05-02T00:00:00Z",
+                turn_index: 0
+              },
+              {
+                speaker: "assistant",
+                text: "มีใครบาดเจ็บหรือหายใจลำบากไหมคะ?",
+                created_at: "2026-05-02T00:00:01Z",
+                turn_index: 1
+              }
+            ],
+            collected_fields: {
+              language: "th",
+              incident_type: "flood",
+              location_text: "หาดใหญ่",
+              people_affected: null,
+              injuries: "",
+              immediate_needs: [],
+              caller_phone_optional: null,
+              landmarks: [],
+              urgency_signals: [],
+              missing_fields: ["injuries"]
+            },
+            confidence: 0.68,
+            human_review_required: true,
+            followup_count: 1,
+            max_followups: 3,
+            case_group: "flood",
+            recommended_team: "flood_response",
+            status: "waiting_for_followup",
+            guardrail_warnings: [],
+            decision_audit: [],
+            created_at: "2026-05-02T00:00:00Z",
+            updated_at: "2026-05-02T00:00:01Z"
+          },
+          case_group: "flood",
+          recommended_team: "flood_response",
+          triage_level: "YELLOW",
+          human_review_required: true,
+          missing_fields: ["injuries"],
+          reason: "Critical intake fields are still missing.",
+          guardrail_warnings: [],
+          created_case: null
+        })
+      )
+    );
+
+    render(<VoiceDebugConsole />);
+    fireEvent.change(screen.getByLabelText("Transcript"), { target: { value: "น้ำท่วมอยู่ที่หาดใหญ่" } });
+    fireEvent.click(screen.getByRole("button", { name: "Intake" }));
+
+    await waitFor(() => expect(screen.getByText("ask_followup")).toBeInTheDocument());
+    expect(screen.getAllByText("flood").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("flood_response").length).toBeGreaterThan(0);
+    expect(screen.getByText("injuries")).toBeInTheDocument();
+    expect(screen.getAllByText("มีใครบาดเจ็บหรือหายใจลำบากไหมคะ?").length).toBeGreaterThan(0);
+    expect(screen.getByText("caller")).toBeInTheDocument();
+    expect(screen.getByText("assistant")).toBeInTheDocument();
+  });
+
+  it("renders websocket intake follow-up payloads", async () => {
+    render(<VoiceDebugConsole />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(mocks.createVoiceWsClient).toHaveBeenCalled());
+
+    act(() => {
+      mocks.lastWsOptions?.onMessage({
+        type: "intake.followup",
+        session_id: "twilio_CA123",
+        transcript: "น้ำท่วมอยู่ที่หาดใหญ่",
+        action: "ask_followup",
+        response_text: "มีใครบาดเจ็บไหมคะ?",
+        partial_state: {
+          session_id: "twilio_CA123",
+          source_input_mode: "twilio_call",
+          conversation_turns: [
+            {
+              speaker: "caller",
+              text: "น้ำท่วมอยู่ที่หาดใหญ่",
+              created_at: "2026-05-02T00:00:00Z",
+              turn_index: 0
+            }
+          ],
+          collected_fields: {
+            language: "th",
+            incident_type: "flood",
+            location_text: "หาดใหญ่",
+            people_affected: null,
+            injuries: "",
+            immediate_needs: [],
+            caller_phone_optional: null,
+            landmarks: [],
+            urgency_signals: [],
+            missing_fields: ["injuries"]
+          },
+          confidence: 0.68,
+          human_review_required: true,
+          followup_count: 1,
+          max_followups: 3,
+          case_group: "flood",
+          recommended_team: "flood_response",
+          status: "waiting_for_followup",
+          guardrail_warnings: ["human_review:elderly_vulnerable"],
+          decision_audit: [],
+          created_at: "2026-05-02T00:00:00Z",
+          updated_at: "2026-05-02T00:00:01Z"
+        },
+        case_group: "flood",
+        recommended_team: "flood_response",
+        triage_level: "YELLOW",
+        human_review_required: true,
+        missing_fields: ["injuries"],
+        reason: "Critical intake fields are still missing.",
+        guardrail_warnings: ["human_review:elderly_vulnerable"],
+        source_input_mode: "twilio_call"
+      });
+    });
+
+    expect(screen.getByText("ask_followup")).toBeInTheDocument();
+    expect(screen.getByText("มีใครบาดเจ็บไหมคะ?")).toBeInTheDocument();
+    expect(screen.getAllByText("human_review:elderly_vulnerable").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("twilio_call").length).toBeGreaterThan(0);
+  });
 });

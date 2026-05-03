@@ -12,13 +12,22 @@ def utc_now() -> datetime:
 
 
 class CrisisCase(TriageResult):
-    pass
+    case_group: str | None = None
+    recommended_team: str | None = None
+    conversation_summary: str | None = None
+    intake_session_id: str | None = None
+    intake_audit: list[dict] = Field(default_factory=list)
 
 
 class CreateCaseRequest(BaseModel):
     case: CrisisCase
     session_id: str | None = None
     source_provider: ProviderMode = ProviderMode.MOCK
+    case_group: str | None = None
+    recommended_team: str | None = None
+    conversation_summary: str | None = None
+    intake_session_id: str | None = None
+    intake_audit: list[dict] = Field(default_factory=list)
 
 
 class CaseRepositoryRecord(BaseModel):
@@ -27,6 +36,11 @@ class CaseRepositoryRecord(BaseModel):
     source_provider: ProviderMode
     debug_event_count: int = Field(default=0, ge=0)
     stored_at: datetime = Field(default_factory=utc_now)
+    case_group: str | None = None
+    recommended_team: str | None = None
+    conversation_summary: str | None = None
+    intake_session_id: str | None = None
+    intake_audit: list[dict] = Field(default_factory=list)
 
 
 class CaseSnapshotResponse(BaseModel):

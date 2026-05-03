@@ -3,12 +3,14 @@
 import React, { useRef, useState } from "react";
 
 import { startMicStreaming } from "@/lib/audio-client";
+import { intakeFromTranscript } from "@/lib/intake-api-client";
 import { createCase, triageFromTranscript } from "@/lib/triage-api-client";
 import { createVoiceWsClient, type VoiceWsClient } from "@/lib/voice-ws-client";
 import type {
   AudioDebugEvent,
   CallMetadata,
   CaseRepositoryRecord,
+  IntakeResponse,
   SourceInputMode,
   TranscriptSource,
   TriageResult,
@@ -37,6 +39,7 @@ export function VoiceDebugConsole() {
   const [transcript, setTranscript] = useState(SAMPLE_TRANSCRIPT);
   const [triage, setTriage] = useState<TriageResult | null>(null);
   const [caseRecord, setCaseRecord] = useState<CaseRepositoryRecord | null>(null);
+  const [intakeResponse, setIntakeResponse] = useState<IntakeResponse | null>(null);
   const [events, setEvents] = useState<AudioDebugEvent[]>([]);
   const [vadState, setVadState] = useState<VadState>("listening");
   const [providerMode, setProviderMode] = useState("mock");
@@ -65,8 +68,37 @@ export function VoiceDebugConsole() {
       setProviderWarnings([]);
       setSourceInputMode(null);
       setCallMetadata(null);
+      setIntakeResponse(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create case");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitIntakeTranscript() {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await intakeFromTranscript({
+        session_id: "debug-session",
+        transcript,
+        language_hint: "th",
+        source_input_mode: "manual"
+      });
+      setIntakeResponse(response);
+      setProviderMode("mock");
+      setTranscriptSource("manual");
+      setAudioRef(null);
+      setProviderWarnings(response.guardrail_warnings);
+      setSourceInputMode(null);
+      setCallMetadata(null);
+      if (response.created_case) {
+        setCaseRecord(response.created_case);
+        setTriage(response.created_case.case);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to process intake");
     } finally {
       setLoading(false);
     }
@@ -85,6 +117,31 @@ export function VoiceDebugConsole() {
       if (message.event.state) setVadState(message.event.state);
       return;
     }
+    if (message.type === "intake.followup") {
+      setTranscript(message.transcript);
+      setIntakeResponse({
+        session_id: message.session_id,
+        action: message.action,
+        response_text: message.response_text,
+        partial_state: message.partial_state,
+        case_group: message.case_group,
+        recommended_team: message.recommended_team,
+        triage_level: message.triage_level,
+        human_review_required: message.human_review_required,
+        missing_fields: message.missing_fields,
+        reason: message.reason,
+        guardrail_warnings: message.guardrail_warnings,
+        created_case: null
+      });
+      setProviderMode(message.provider_mode ?? providerMode);
+      if (message.transcript_source) setTranscriptSource(message.transcript_source);
+      setAudioRef(message.audio_ref ?? null);
+      setProviderWarnings([...(message.warnings ?? []), ...message.guardrail_warnings]);
+      setSourceInputMode(message.source_input_mode ?? null);
+      setCallMetadata(message.call_metadata ?? null);
+      setVadState("listening");
+      return;
+    }
     if (message.type === "triage.case.created") {
       setTranscript(message.transcript);
       setTriage(message.record.case);
@@ -95,6 +152,22 @@ export function VoiceDebugConsole() {
       setProviderWarnings(message.warnings);
       setSourceInputMode(message.source_input_mode ?? null);
       setCallMetadata(message.call_metadata ?? null);
+      if (message.intake) {
+        setIntakeResponse({
+          session_id: message.session_id,
+          action: message.intake.action,
+          response_text: message.response_text ?? "",
+          partial_state: message.intake.partial_state,
+          case_group: message.intake.case_group,
+          recommended_team: message.intake.recommended_team,
+          triage_level: message.record.case.triage_level,
+          human_review_required: message.record.case.human_review_required,
+          missing_fields: message.intake.missing_fields,
+          reason: message.intake.reason,
+          guardrail_warnings: message.intake.guardrail_warnings,
+          created_case: message.record
+        });
+      }
       setVadState("listening");
       return;
     }
@@ -110,6 +183,7 @@ export function VoiceDebugConsole() {
     setAudioRef(null);
     setSourceInputMode(null);
     setCallMetadata(null);
+    setIntakeResponse(null);
     const sessionId = `session_${Date.now()}`;
     const client = createVoiceWsClient({
       sessionId,
@@ -152,7 +226,7 @@ export function VoiceDebugConsole() {
               value={transcript}
               onChange={(event) => setTranscript(event.target.value)}
             />
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 className="border border-slate-900 bg-slate-950 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
                 type="button"
@@ -160,6 +234,14 @@ export function VoiceDebugConsole() {
                 disabled={loading}
               >
                 {loading ? "Creating..." : "Create Case"}
+              </button>
+              <button
+                className="border border-sky-700 bg-sky-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                type="button"
+                onClick={submitIntakeTranscript}
+                disabled={loading}
+              >
+                {loading ? "Thinking..." : "Intake"}
               </button>
               <button
                 className="border border-command-line bg-white px-3 py-2 text-sm font-semibold text-slate-900"
@@ -291,6 +373,14 @@ export function VoiceDebugConsole() {
                 <dt className="text-slate-500">Provider</dt>
                 <dd className="font-medium">{providerMode}</dd>
               </div>
+              <div>
+                <dt className="text-slate-500">Group</dt>
+                <dd className="font-medium">{caseRecord?.case_group ?? caseRecord?.case.case_group ?? intakeResponse?.case_group ?? "-"}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Team</dt>
+                <dd className="font-medium">{caseRecord?.recommended_team ?? caseRecord?.case.recommended_team ?? intakeResponse?.recommended_team ?? "-"}</dd>
+              </div>
               <div className="col-span-2">
                 <dt className="text-slate-500">Location</dt>
                 <dd className="font-medium">{triage?.location_text || "-"}</dd>
@@ -309,9 +399,58 @@ export function VoiceDebugConsole() {
           </div>
 
           <div className="border border-command-line bg-white p-4 shadow-sm">
+            <h2 className="text-base font-semibold">Intake Decision</h2>
+            <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <dt className="text-slate-500">Action</dt>
+                <dd className="font-medium">{intakeResponse?.action ?? "-"}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Group</dt>
+                <dd className="font-medium">{intakeResponse?.case_group ?? "-"}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Team</dt>
+                <dd className="font-medium">{intakeResponse?.recommended_team ?? "-"}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Missing</dt>
+                <dd className="font-medium">{intakeResponse?.missing_fields.join(", ") || "-"}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-slate-500">Response Text</dt>
+                <dd className="font-medium">{intakeResponse?.response_text || "-"}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-slate-500">Reason</dt>
+                <dd className="font-medium">{intakeResponse?.reason || "-"}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-slate-500">Guardrails</dt>
+                <dd className="font-medium">{intakeResponse?.guardrail_warnings.join(", ") || "-"}</dd>
+              </div>
+            </dl>
+            <div className="mt-4 border-t border-command-line pt-4">
+              <h3 className="text-sm font-semibold">Conversation Turns</h3>
+              <div className="mt-2 grid max-h-40 gap-2 overflow-auto text-xs">
+                {(intakeResponse?.partial_state.conversation_turns ?? []).length === 0 ? (
+                  <p className="text-slate-500">No intake turns yet.</p>
+                ) : (
+                  intakeResponse?.partial_state.conversation_turns.map((turn) => (
+                    <div key={`${turn.turn_index}-${turn.created_at}`} className="border border-command-line bg-command-panel p-2">
+                      <span className="font-semibold">{turn.speaker}</span>
+                      <p className="mt-1 text-slate-700">{turn.text}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="border border-command-line bg-white p-4 shadow-sm">
             <h2 className="text-base font-semibold">Structured JSON</h2>
             <pre className="mt-4 max-h-[440px] overflow-auto bg-slate-950 p-3 text-xs text-slate-100">
-              {JSON.stringify(caseRecord?.case ?? triage ?? {}, null, 2)}
+              {JSON.stringify({ case: caseRecord?.case ?? triage ?? null, intake: intakeResponse }, null, 2)}
             </pre>
           </div>
 
