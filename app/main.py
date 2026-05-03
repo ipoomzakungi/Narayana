@@ -9,6 +9,7 @@ from app.api.routes_cases import router as cases_router
 from app.api.routes_intake import router as intake_router
 from app.api.routes_triage import router as triage_router
 from app.api.routes_twilio import router as twilio_router
+from app.api.routes_tts import router as tts_router
 from app.core.config import get_settings
 
 
@@ -31,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(intake_router)
     app.include_router(cases_router)
     app.include_router(twilio_router)
+    app.include_router(tts_router)
     app.include_router(acs_router)
     return app
 

@@ -12,6 +12,7 @@ import type {
   CaseRepositoryRecord,
   IntakeResponse,
   SourceInputMode,
+  TTSDebugStatus,
   TranscriptSource,
   TriageResult,
   VadState,
@@ -48,6 +49,7 @@ export function VoiceDebugConsole() {
   const [providerWarnings, setProviderWarnings] = useState<string[]>([]);
   const [sourceInputMode, setSourceInputMode] = useState<SourceInputMode | null>(null);
   const [callMetadata, setCallMetadata] = useState<CallMetadata | null>(null);
+  const [ttsStatus, setTtsStatus] = useState<TTSDebugStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +70,7 @@ export function VoiceDebugConsole() {
       setProviderWarnings([]);
       setSourceInputMode(null);
       setCallMetadata(null);
+      setTtsStatus(null);
       setIntakeResponse(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create case");
@@ -93,6 +96,7 @@ export function VoiceDebugConsole() {
       setProviderWarnings(response.guardrail_warnings);
       setSourceInputMode(null);
       setCallMetadata(null);
+      setTtsStatus(null);
       if (response.created_case) {
         setCaseRecord(response.created_case);
         setTriage(response.created_case.case);
@@ -110,6 +114,7 @@ export function VoiceDebugConsole() {
       setVadState(message.state);
       setSourceInputMode(message.source_input_mode ?? null);
       setCallMetadata(message.call_metadata ?? null);
+      setTtsStatus(null);
       return;
     }
     if (message.type === "debug.event") {
@@ -137,6 +142,7 @@ export function VoiceDebugConsole() {
       if (message.transcript_source) setTranscriptSource(message.transcript_source);
       setAudioRef(message.audio_ref ?? null);
       setProviderWarnings([...(message.warnings ?? []), ...message.guardrail_warnings]);
+      setTtsStatus(message.tts ?? null);
       setSourceInputMode(message.source_input_mode ?? null);
       setCallMetadata(message.call_metadata ?? null);
       setVadState("listening");
@@ -150,6 +156,7 @@ export function VoiceDebugConsole() {
       setTranscriptSource(message.transcript_source);
       setAudioRef(message.audio_ref);
       setProviderWarnings(message.warnings);
+      setTtsStatus(message.tts ?? null);
       setSourceInputMode(message.source_input_mode ?? null);
       setCallMetadata(message.call_metadata ?? null);
       if (message.intake) {
@@ -183,6 +190,7 @@ export function VoiceDebugConsole() {
     setAudioRef(null);
     setSourceInputMode(null);
     setCallMetadata(null);
+    setTtsStatus(null);
     setIntakeResponse(null);
     const sessionId = `session_${Date.now()}`;
     const client = createVoiceWsClient({
@@ -275,6 +283,18 @@ export function VoiceDebugConsole() {
                 <dt className="text-slate-500">Audio Ref</dt>
                 <dd className="break-all font-medium">{audioRef ?? "-"}</dd>
               </div>
+              <div className="grid grid-cols-[110px_1fr] gap-2">
+                <dt className="text-slate-500">Twilio TTS</dt>
+                <dd className="font-medium">
+                  {ttsStatus
+                    ? `${ttsStatus.enabled ? "enabled" : "disabled"} / ${ttsStatus.configured ? "configured" : "unconfigured"}`
+                    : "-"}
+                </dd>
+              </div>
+              <div className="grid grid-cols-[110px_1fr] gap-2">
+                <dt className="text-slate-500">TTS Voice</dt>
+                <dd className="font-medium">{ttsStatus?.voice ?? "-"}</dd>
+              </div>
             </dl>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <button
@@ -302,6 +322,16 @@ export function VoiceDebugConsole() {
               <h2 className="text-sm font-semibold">Provider Warnings</h2>
               <ul className="mt-2 space-y-1">
                 {providerWarnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {ttsStatus?.warnings && ttsStatus.warnings.length > 0 ? (
+            <div className="mt-4 border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <h2 className="text-sm font-semibold">TTS Warnings</h2>
+              <ul className="mt-2 space-y-1">
+                {ttsStatus.warnings.map((warning) => (
                   <li key={warning}>{warning}</li>
                 ))}
               </ul>

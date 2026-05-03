@@ -144,6 +144,15 @@ export interface IntakeResponse {
   created_case: CaseRepositoryRecord | null;
 }
 
+export interface TTSDebugStatus {
+  enabled: boolean;
+  configured: boolean;
+  voice: string;
+  audio_format: "mulaw_8khz" | string;
+  stream_sid_present?: boolean;
+  warnings?: string[];
+}
+
 export type VoiceWsMessage =
   | {
       type: "session.started";
@@ -173,6 +182,7 @@ export type VoiceWsMessage =
         guardrail_warnings: string[];
         partial_state: IntakeSessionState;
       };
+      tts?: TTSDebugStatus;
       source_input_mode?: SourceInputMode;
       call_metadata?: CallMetadata;
     }
@@ -194,6 +204,7 @@ export type VoiceWsMessage =
       provider_mode?: ProviderMode;
       transcript_source?: TranscriptSource;
       audio_ref?: string | null;
+      tts?: TTSDebugStatus;
       source_input_mode?: SourceInputMode;
       call_metadata?: CallMetadata;
     }

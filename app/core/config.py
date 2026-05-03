@@ -59,6 +59,10 @@ class Settings:
     assistant_question_style: str = "single_short_question"
     assistant_name: str = "Narayana"
     assistant_response_max_chars: int = 180
+    enable_twilio_tts_response: bool = False
+    azure_speech_voice: str = "th-TH-PremwadeeNeural"
+    tts_max_chars: int = 220
+    tts_output_format: str = "mulaw_8khz"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -98,11 +102,26 @@ class Settings:
             assistant_question_style=os.getenv("ASSISTANT_QUESTION_STYLE", "single_short_question"),
             assistant_name=os.getenv("ASSISTANT_NAME", "Narayana"),
             assistant_response_max_chars=int(os.getenv("ASSISTANT_RESPONSE_MAX_CHARS", "180")),
+            enable_twilio_tts_response=_truthy(os.getenv("ENABLE_TWILIO_TTS_RESPONSE"), default=False),
+            azure_speech_voice=os.getenv("AZURE_SPEECH_VOICE", "th-TH-PremwadeeNeural"),
+            tts_max_chars=int(os.getenv("TTS_MAX_CHARS", "220")),
+            tts_output_format=os.getenv("TTS_OUTPUT_FORMAT", "mulaw_8khz"),
         )
 
     @property
     def azure_speech_configured(self) -> bool:
         return bool(self.azure_speech_key and self.azure_speech_region)
+
+    @property
+    def azure_speech_tts_configured(self) -> bool:
+        return self.azure_speech_configured
+
+    def missing_azure_speech_tts_variables(self) -> list[str]:
+        checks = {
+            "AZURE_SPEECH_KEY": self.azure_speech_key,
+            "AZURE_SPEECH_REGION": self.azure_speech_region,
+        }
+        return [name for name, value in checks.items() if not value]
 
     @property
     def azure_openai_configured(self) -> bool:
