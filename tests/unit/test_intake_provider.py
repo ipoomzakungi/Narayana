@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+import pytest
+
+from app.core.config import Settings
+from app.models.intake import ConversationSpeaker, ConversationTurn, IntakeAction, IntakeSessionState
+from app.services.azure_openai_intake_provider import AzureOpenAIIntakeProvider
+from app.services.intake_guardrails import evaluate_intake_guardrails
+
+
+@pytest.mark.asyncio
+async def test_provider_fallback_asks_one_concise_thai_question_without_credentials() -> None:
+    settings = Settings(use_mock_services=True, assistant_response_max_chars=180)
+    provider = AzureOpenAIIntakeProvider(settings)
+    state = IntakeSessionState(session_id="session_1")
+    transcript = "น้ำท่วมอยู่ที่หาดใหญ่"
+    state.conversation_turns.append(ConversationTurn(speaker=ConversationSpeaker.CALLER, text=transcript, turn_index=0))
+
+    decision = await provider.decide(state, transcript, evaluate_intake_guardrails(transcript, state))
+
+    assert decision.action == IntakeAction.ASK_FOLLOWUP
+    assert decision.updated_fields.location_text == "หาดใหญ่"
+    assert decision.updated_fields.incident_type == "flood"
+    assert decision.response_text.endswith("คะ?")
+    assert len(decision.response_text) <= 180
+    assert "injuries" in decision.missing_fields
+
+
+@pytest.mark.asyncio
+async def test_provider_fallback_creates_red_decision_for_high_risk_sample() -> None:
+    settings = Settings(use_mock_services=True)
+    provider = AzureOpenAIIntakeProvider(settings)
+    state = IntakeSessionState(session_id="session_1")
+    transcript = "น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง"
+    state.conversation_turns.append(ConversationTurn(speaker=ConversationSpeaker.CALLER, text=transcript, turn_index=0))
+
+    decision = await provider.decide(state, transcript, evaluate_intake_guardrails(transcript, state))
+
+    assert decision.action == IntakeAction.ESCALATE_HUMAN_REVIEW
+    assert decision.triage_level == "RED"
+    assert decision.case_group == "rescue"
+    assert decision.human_review_required is True
+    assert "ขอให้เจ้าหน้าที่ตรวจสอบทันที" in decision.response_text

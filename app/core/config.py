@@ -52,6 +52,13 @@ class Settings:
     acs_connection_string: str = ""
     acs_phone_number: str = ""
     acs_callback_public_base_url: str = ""
+    enable_multi_turn_intake: bool = False
+    assistant_language: str = "th"
+    assistant_tone: str = "calm_concise"
+    assistant_max_followups: int = 3
+    assistant_question_style: str = "single_short_question"
+    assistant_name: str = "Narayana"
+    assistant_response_max_chars: int = 180
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -84,6 +91,13 @@ class Settings:
             acs_connection_string=os.getenv("ACS_CONNECTION_STRING", ""),
             acs_phone_number=os.getenv("ACS_PHONE_NUMBER", ""),
             acs_callback_public_base_url=os.getenv("ACS_CALLBACK_PUBLIC_BASE_URL", ""),
+            enable_multi_turn_intake=_truthy(os.getenv("ENABLE_MULTI_TURN_INTAKE"), default=False),
+            assistant_language=os.getenv("ASSISTANT_LANGUAGE", "th"),
+            assistant_tone=os.getenv("ASSISTANT_TONE", "calm_concise"),
+            assistant_max_followups=int(os.getenv("ASSISTANT_MAX_FOLLOWUPS", "3")),
+            assistant_question_style=os.getenv("ASSISTANT_QUESTION_STYLE", "single_short_question"),
+            assistant_name=os.getenv("ASSISTANT_NAME", "Narayana"),
+            assistant_response_max_chars=int(os.getenv("ASSISTANT_RESPONSE_MAX_CHARS", "180")),
         )
 
     @property

@@ -5,10 +5,12 @@ import logging
 from app.core.config import Settings
 from app.models.audio import AudioDebugEvent, AudioDebugEventType, AudioFrame, VadState
 from app.models.case import CrisisCase
+from app.models.intake import IntakeAction, IntakeRequest, IntakeResponse
 from app.models.telephony import CallMetadata
 from app.models.triage import ProviderMode
 from app.services.audio_buffer_service import AudioBufferError, AudioBufferService
 from app.services.case_repository import get_case_repository
+from app.services.intake_orchestrator import IntakeOrchestrator
 from app.services.safety_rules import apply_safety_rules
 from app.services.turn_manager import TurnManager
 from app.services.voice_agent_provider import get_voice_provider
@@ -109,6 +111,35 @@ class AudioSessionProcessor:
 
         provider = get_voice_provider(self.settings, self.requested_mode)
         provider_result = await provider.process_turn(result.committed_turn)
+
+        if self.settings.enable_multi_turn_intake:
+            transcript = provider_result.transcript.strip()
+            intake_warnings = [*audio_warnings, *provider_result.provider_warnings]
+            if not transcript:
+                transcript = "เสียงไม่ชัด"
+                intake_warnings.append("Provider returned an empty transcript; routed as unclear speech.")
+            intake_response = await IntakeOrchestrator(self.settings).process_transcript(
+                IntakeRequest(
+                    session_id=self.session_id,
+                    transcript=transcript,
+                    language_hint=provider_result.language or "th",
+                    source_input_mode=self.source_input_mode or "local_mic",
+                    call_id=self.call_metadata.call_id if self.call_metadata else None,
+                    caller_phone_optional=self.call_metadata.from_number if self.call_metadata else None,
+                )
+            )
+            payloads.append(
+                self._intake_payload(
+                    intake_response,
+                    transcript=transcript,
+                    provider_mode=provider_result.provider_mode,
+                    transcript_source=provider_result.transcript_source,
+                    audio_ref=provider_result.audio_ref or result.committed_turn.audio_ref,
+                    warnings=intake_warnings,
+                )
+            )
+            return payloads
+
         safe_triage = apply_safety_rules(provider_result.triage, self.settings.low_confidence_threshold)
         case = CrisisCase.model_validate(safe_triage.model_dump())
         repository = get_case_repository(self.settings)
@@ -141,3 +172,68 @@ class AudioSessionProcessor:
             case_payload["call_metadata"] = self.call_metadata.model_dump(mode="json")
         payloads.append(case_payload)
         return payloads
+
+    def _intake_payload(
+        self,
+        intake_response: IntakeResponse,
+        *,
+        transcript: str,
+        provider_mode: ProviderMode,
+        transcript_source: str,
+        audio_ref: str | None,
+        warnings: list[str],
+    ) -> dict:
+        if intake_response.action == IntakeAction.ASK_FOLLOWUP:
+            payload: dict = {
+                "type": "intake.followup",
+                "session_id": self.session_id,
+                "transcript": transcript,
+                "action": intake_response.action.value,
+                "response_text": intake_response.response_text,
+                "partial_state": intake_response.partial_state.model_dump(mode="json"),
+                "case_group": intake_response.case_group.value,
+                "recommended_team": intake_response.recommended_team,
+                "triage_level": intake_response.triage_level.value,
+                "human_review_required": intake_response.human_review_required,
+                "missing_fields": intake_response.missing_fields,
+                "reason": intake_response.reason,
+                "guardrail_warnings": intake_response.guardrail_warnings,
+                "warnings": warnings,
+                "provider_mode": provider_mode.value,
+                "transcript_source": transcript_source,
+                "audio_ref": audio_ref,
+            }
+        else:
+            record = intake_response.created_case
+            logger.info(
+                "Case created case_id=%s triage_level=%s session_id=%s",
+                record.case.case_id if record else None,
+                record.case.triage_level.value if record else None,
+                self.session_id,
+            )
+            payload = {
+                "type": "triage.case.created",
+                "session_id": self.session_id,
+                "transcript": transcript,
+                "provider_mode": provider_mode.value,
+                "transcript_source": transcript_source,
+                "audio_ref": audio_ref,
+                "response_text": intake_response.response_text,
+                "warnings": warnings,
+                "record": record.model_dump(mode="json") if record else None,
+                "intake": {
+                    "action": intake_response.action.value,
+                    "case_group": intake_response.case_group.value,
+                    "recommended_team": intake_response.recommended_team,
+                    "missing_fields": intake_response.missing_fields,
+                    "reason": intake_response.reason,
+                    "guardrail_warnings": intake_response.guardrail_warnings,
+                    "partial_state": intake_response.partial_state.model_dump(mode="json"),
+                },
+            }
+
+        if self.source_input_mode:
+            payload["source_input_mode"] = self.source_input_mode
+        if self.call_metadata:
+            payload["call_metadata"] = self.call_metadata.model_dump(mode="json")
+        return payload

@@ -22,12 +22,22 @@ class CosmosCaseRepository:
         session_id: str | None,
         source_provider: ProviderMode,
         debug_event_count: int = 0,
+        case_group: str | None = None,
+        recommended_team: str | None = None,
+        conversation_summary: str | None = None,
+        intake_session_id: str | None = None,
+        intake_audit: list[dict] | None = None,
     ) -> CaseRepositoryRecord:
         record = CaseRepositoryRecord(
             case=case,
             session_id=session_id,
             source_provider=source_provider,
             debug_event_count=debug_event_count,
+            case_group=case_group or case.case_group,
+            recommended_team=recommended_team or case.recommended_team,
+            conversation_summary=conversation_summary or case.conversation_summary,
+            intake_session_id=intake_session_id or case.intake_session_id,
+            intake_audit=intake_audit or case.intake_audit,
         )
         payload = record.model_dump(mode="json")
         payload["id"] = case.case_id

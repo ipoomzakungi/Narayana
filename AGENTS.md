@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
 For Narayana AI implementation context, read the current plan:
 
-- `specs/004-aca-twilio-deploy/plan.md`
+- `specs/005-multi-turn-intake/plan.md`
 <!-- SPECKIT END -->

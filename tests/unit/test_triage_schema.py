@@ -58,3 +58,34 @@ def test_case_repository_record_shape() -> None:
     assert record.case.status == CaseStatus.PENDING
     assert record.source_provider == ProviderMode.MOCK
     assert record.debug_event_count == 3
+
+
+def test_case_repository_record_accepts_optional_intake_fields() -> None:
+    case = CrisisCase(
+        language="th",
+        incident_type="flood",
+        triage_level="RED",
+        confidence=0.92,
+        location_text="หาดใหญ่",
+        ai_summary="Flood with trapped person.",
+        triage_reason="Trapped person.",
+        case_group="rescue",
+        recommended_team="rescue",
+        conversation_summary="Caller reported flood.",
+        intake_session_id="session_1",
+        intake_audit=[{"action": "escalate_human_review"}],
+    )
+    record = CaseRepositoryRecord(
+        case=case,
+        session_id="session_1",
+        source_provider=ProviderMode.MOCK,
+        case_group="rescue",
+        recommended_team="rescue",
+        conversation_summary="Caller reported flood.",
+        intake_session_id="session_1",
+        intake_audit=[{"action": "escalate_human_review"}],
+    )
+
+    assert record.case.case_group == "rescue"
+    assert record.recommended_team == "rescue"
+    assert record.conversation_summary == "Caller reported flood."

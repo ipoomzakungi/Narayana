@@ -14,6 +14,11 @@ class CaseRepository(Protocol):
         session_id: str | None,
         source_provider: ProviderMode,
         debug_event_count: int = 0,
+        case_group: str | None = None,
+        recommended_team: str | None = None,
+        conversation_summary: str | None = None,
+        intake_session_id: str | None = None,
+        intake_audit: list[dict] | None = None,
     ) -> CaseRepositoryRecord:
         ...
 
