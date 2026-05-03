@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from urllib.parse import parse_qs
 from xml.sax.saxutils import escape
 
@@ -14,6 +15,7 @@ from app.services.audio_session_processor import AudioSessionProcessor
 from app.services.twilio_audio_service import TwilioMediaError, normalize_twilio_media_message, twilio_call_metadata
 
 router = APIRouter(tags=["telephony-twilio"])
+logger = logging.getLogger(__name__)
 
 
 def _twilio_stream_url(public_base_url: str, call_id: str) -> str:
@@ -81,6 +83,11 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
     await websocket.accept()
     settings = get_settings()
     session_id = f"twilio_{call_id}"
+    logger.info(
+        "Twilio WebSocket started call_id=%s source_input_mode=%s",
+        call_id,
+        VoiceInputMode.TWILIO_CALL.value,
+    )
     metadata = _default_call_metadata(call_id)
     processor = AudioSessionProcessor(
         settings=settings,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from app.core.config import Settings
 from app.models.audio import AudioDebugEvent, AudioDebugEventType, AudioFrame, VadState
 from app.models.case import CrisisCase
@@ -10,6 +12,8 @@ from app.services.case_repository import get_case_repository
 from app.services.safety_rules import apply_safety_rules
 from app.services.turn_manager import TurnManager
 from app.services.voice_agent_provider import get_voice_provider
+
+logger = logging.getLogger(__name__)
 
 
 def event_payload(event: AudioDebugEvent) -> dict:
@@ -66,6 +70,11 @@ class AudioSessionProcessor:
         if result.committed_turn is not None:
             try:
                 audio_result = self.audio_buffer.write_committed_turn(result.committed_turn)
+                logger.info(
+                    "Turn committed for session_id=%s audio_ref=%s",
+                    self.session_id,
+                    audio_result.audio_ref,
+                )
                 result.committed_turn.audio_ref = audio_result.audio_ref
                 result.committed_turn.audio_debug_id = audio_result.audio_debug_id
                 for event in result.events:
@@ -108,6 +117,12 @@ class AudioSessionProcessor:
             session_id=self.session_id,
             source_provider=provider_result.provider_mode,
             debug_event_count=len(self.debug_events),
+        )
+        logger.info(
+            "Case created case_id=%s triage_level=%s session_id=%s",
+            record.case.case_id,
+            record.case.triage_level.value,
+            self.session_id,
         )
         case_payload = {
             "type": "triage.case.created",

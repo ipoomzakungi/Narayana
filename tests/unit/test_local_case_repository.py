@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from app.models.case import CrisisCase
@@ -7,8 +9,10 @@ from app.models.triage import CaseStatus, IncidentType, ProviderMode, TriageLeve
 from app.services.local_case_repository import LocalCaseRepository
 
 
-def make_case() -> CrisisCase:
+def make_case(case_id: str = "case_test", created_at: datetime | None = None) -> CrisisCase:
+    created = created_at or datetime(2026, 5, 2, tzinfo=timezone.utc)
     return CrisisCase(
+        case_id=case_id,
         language="th",
         incident_type=IncidentType.FLOOD,
         triage_level=TriageLevel.RED,
@@ -19,6 +23,8 @@ def make_case() -> CrisisCase:
         ai_summary="Flood with trapped elderly person.",
         triage_reason="Trapped person and breathing difficulty.",
         human_review_required=True,
+        created_at=created,
+        updated_at=created,
     )
 
 
@@ -53,3 +59,19 @@ async def test_repository_does_not_auto_dispatch_or_close(tmp_path) -> None:
     record = await repository.create(case, session_id=None, source_provider=ProviderMode.MOCK)
 
     assert record.case.status == CaseStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_list_recent_returns_newest_cases_first_and_applies_limit(tmp_path) -> None:
+    repository = LocalCaseRepository(str(tmp_path / "cases.json"))
+    oldest = make_case("case_old", datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc))
+    newest = make_case("case_new", datetime(2026, 5, 3, 10, 0, tzinfo=timezone.utc))
+    middle = make_case("case_mid", datetime(2026, 5, 2, 10, 0, tzinfo=timezone.utc))
+
+    await repository.create(oldest, session_id="session_old", source_provider=ProviderMode.MOCK)
+    await repository.create(newest, session_id="session_new", source_provider=ProviderMode.MOCK)
+    await repository.create(middle, session_id="session_mid", source_provider=ProviderMode.MOCK)
+
+    records = await repository.list_recent(limit=2)
+
+    assert [record.case.case_id for record in records] == ["case_new", "case_mid"]

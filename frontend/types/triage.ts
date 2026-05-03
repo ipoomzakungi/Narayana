@@ -46,6 +46,15 @@ export interface CaseRepositoryRecord {
   stored_at: string;
 }
 
+export interface CaseSnapshotResponse {
+  generated_at: string;
+  expires_at: string;
+  ttl_seconds: number;
+  count: number;
+  source: "cache" | "repository";
+  cases: CaseRepositoryRecord[];
+}
+
 export interface AudioDebugEvent {
   event_id: string;
   session_id: string;

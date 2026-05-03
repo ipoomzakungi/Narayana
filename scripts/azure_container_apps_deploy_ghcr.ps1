@@ -10,6 +10,7 @@ param(
     [string]$UseMockServices = $(if ($env:USE_MOCK_SERVICES) { $env:USE_MOCK_SERVICES } else { "true" }),
     [string]$VoiceInputMode = $(if ($env:VOICE_INPUT_MODE) { $env:VOICE_INPUT_MODE } else { "twilio_call" }),
     [string]$TelephonyProvider = $(if ($env:TELEPHONY_PROVIDER) { $env:TELEPHONY_PROVIDER } else { "twilio" }),
+    [string]$CorsAllowOrigins = $env:CORS_ALLOW_ORIGINS,
     [string]$GhcrUsername = $env:GHCR_USERNAME,
     [string]$GhcrToken = $env:GHCR_PAT
 )
@@ -55,6 +56,9 @@ $envVars = @(
     "TWILIO_PHONE_NUMBER=$TwilioPhoneNumber",
     "TWILIO_WEBHOOK_PUBLIC_BASE_URL=$TwilioWebhookPublicBaseUrl"
 )
+if (-not [string]::IsNullOrWhiteSpace($CorsAllowOrigins)) {
+    $envVars += "CORS_ALLOW_ORIGINS=$CorsAllowOrigins"
+}
 
 $registryArgs = @()
 if (-not [string]::IsNullOrWhiteSpace($GhcrUsername) -and -not [string]::IsNullOrWhiteSpace($GhcrToken)) {

@@ -1,5 +1,5 @@
 import { CasesDashboard } from "@/components/cases/CasesDashboard";
 
-export default function Home() {
+export default function CasesPage() {
   return <CasesDashboard />;
 }

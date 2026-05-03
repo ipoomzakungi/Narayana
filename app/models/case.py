@@ -27,3 +27,12 @@ class CaseRepositoryRecord(BaseModel):
     source_provider: ProviderMode
     debug_event_count: int = Field(default=0, ge=0)
     stored_at: datetime = Field(default_factory=utc_now)
+
+
+class CaseSnapshotResponse(BaseModel):
+    generated_at: datetime
+    expires_at: datetime
+    ttl_seconds: int = Field(ge=1)
+    count: int = Field(ge=0)
+    source: str
+    cases: list[CaseRepositoryRecord]

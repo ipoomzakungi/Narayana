@@ -41,3 +41,32 @@ class CosmosCaseRepository:
             return None
         raw.pop("id", None)
         return CaseRepositoryRecord.model_validate(raw)
+
+    async def list_recent(self, limit: int = 50) -> list[CaseRepositoryRecord]:
+        if limit <= 0:
+            return []
+
+        container = self._container()
+        parameters = [{"name": "@limit", "value": limit}]
+        queries = [
+            "SELECT * FROM c ORDER BY c.case.created_at DESC OFFSET 0 LIMIT @limit",
+            "SELECT * FROM c OFFSET 0 LIMIT @limit",
+        ]
+        for query in queries:
+            try:
+                items = list(
+                    container.query_items(
+                        query=query,
+                        parameters=parameters,
+                        enable_cross_partition_query=True,
+                    )
+                )
+                records = []
+                for raw in items:
+                    raw.pop("id", None)
+                    records.append(CaseRepositoryRecord.model_validate(raw))
+                records.sort(key=lambda record: record.case.created_at or record.stored_at, reverse=True)
+                return records[:limit]
+            except Exception:
+                continue
+        return []

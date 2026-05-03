@@ -349,6 +349,65 @@ wss://
 /ws/telephony/twilio/CA_TEST
 ```
 
+## Cached Cases Dashboard
+
+The backend exposes a low-cost dashboard read endpoint:
+
+```text
+GET /api/cases/recent-cached?limit=50
+```
+
+It returns an in-process snapshot with a 60 second TTL and response headers:
+
+```text
+Cache-Control: public, max-age=60
+X-Cache-Source: cache | repository
+```
+
+Use this endpoint for dashboards instead of polling fresh repository data. A fresh endpoint also exists for manual inspection:
+
+```text
+GET /api/cases/recent?limit=50
+```
+
+When hosting the frontend outside localhost, set backend CORS explicitly. Do not use `*` with credentials enabled:
+
+```powershell
+$env:CORS_ALLOW_ORIGINS="http://localhost:3000,https://<static-web-app-url>"
+.\scripts\azure_container_apps_deploy_ghcr.ps1
+```
+
+For the current Azure backend, the dashboard API base URL is:
+
+```text
+https://narayana-api.graypond-039de86c.southeastasia.azurecontainerapps.io
+```
+
+## Azure Static Web Apps Frontend
+
+Deploy the frontend as a separate static app. The backend remains Azure Container Apps because Twilio Media Streams need the FastAPI WebSocket endpoint.
+
+Azure Static Web Apps settings:
+
+```text
+App location: frontend
+API location: <empty>
+Output location: out
+```
+
+The Next.js frontend is configured for static export. Set this build-time environment variable in Azure Static Web Apps:
+
+```text
+NEXT_PUBLIC_API_BASE_URL=https://narayana-api.graypond-039de86c.southeastasia.azurecontainerapps.io
+```
+
+After deployment:
+
+```text
+Dashboard URL: /cases
+Debug console URL: /voice-debug
+```
+
 ## Public Webhook Check
 
 Run a fake Twilio webhook check before using real calls:

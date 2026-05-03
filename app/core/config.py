@@ -4,11 +4,22 @@ from dataclasses import dataclass
 import os
 from functools import lru_cache
 
+DEFAULT_CORS_ALLOW_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
+
 
 def _truthy(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _csv(value: str | None, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+    if value is None or not value.strip():
+        return default
+    values = tuple(item.strip().rstrip("/") for item in value.split(",") if item.strip())
+    if "*" in values:
+        raise ValueError("CORS_ALLOW_ORIGINS must not contain '*' while credentials are enabled.")
+    return values or default
 
 
 @dataclass(frozen=True)
@@ -37,6 +48,7 @@ class Settings:
     twilio_auth_token: str = ""
     twilio_phone_number: str = ""
     twilio_webhook_public_base_url: str = ""
+    cors_allow_origins: tuple[str, ...] = DEFAULT_CORS_ALLOW_ORIGINS
     acs_connection_string: str = ""
     acs_phone_number: str = ""
     acs_callback_public_base_url: str = ""
@@ -68,6 +80,7 @@ class Settings:
             twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
             twilio_phone_number=os.getenv("TWILIO_PHONE_NUMBER", ""),
             twilio_webhook_public_base_url=os.getenv("TWILIO_WEBHOOK_PUBLIC_BASE_URL", ""),
+            cors_allow_origins=_csv(os.getenv("CORS_ALLOW_ORIGINS"), DEFAULT_CORS_ALLOW_ORIGINS),
             acs_connection_string=os.getenv("ACS_CONNECTION_STRING", ""),
             acs_phone_number=os.getenv("ACS_PHONE_NUMBER", ""),
             acs_callback_public_base_url=os.getenv("ACS_CALLBACK_PUBLIC_BASE_URL", ""),

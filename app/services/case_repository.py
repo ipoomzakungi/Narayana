@@ -20,6 +20,9 @@ class CaseRepository(Protocol):
     async def get(self, case_id: str) -> CaseRepositoryRecord | None:
         ...
 
+    async def list_recent(self, limit: int = 50) -> list[CaseRepositoryRecord]:
+        ...
+
 
 def get_case_repository(settings: Settings) -> CaseRepository:
     if settings.cosmos_configured:

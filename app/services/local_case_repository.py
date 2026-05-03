@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.models.case import CaseRepositoryRecord, CrisisCase
@@ -46,3 +47,25 @@ class LocalCaseRepository:
         if not raw:
             return None
         return CaseRepositoryRecord.model_validate(raw)
+
+    async def list_recent(self, limit: int = 50) -> list[CaseRepositoryRecord]:
+        if limit <= 0:
+            return []
+        records: list[CaseRepositoryRecord] = []
+        for raw in self._read().values():
+            try:
+                records.append(CaseRepositoryRecord.model_validate(raw))
+            except Exception:
+                continue
+        records.sort(key=_record_created_at, reverse=True)
+        return records[:limit]
+
+
+def _aware_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _record_created_at(record: CaseRepositoryRecord) -> datetime:
+    return _aware_datetime(record.case.created_at or record.stored_at)
