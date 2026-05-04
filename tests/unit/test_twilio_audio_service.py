@@ -9,7 +9,13 @@ from app.models.telephony import TelephonyCodec, TelephonyProvider
 from app.services.audio_frame_service import decode_pcm16
 from app.services.twilio_audio_service import (
     TwilioMediaError,
+    build_twilio_mark_event,
+    build_twilio_media_event,
+    chunk_mulaw_audio_for_twilio,
     decode_mulaw_to_pcm16,
+    encode_pcm16_to_mulaw,
+    encode_pcm16_to_mulaw_base64,
+    estimate_audio_duration_ms,
     normalize_twilio_media_message,
     twilio_call_metadata,
 )
@@ -102,3 +108,40 @@ def test_unsupported_codec_raises_clear_error() -> None:
 def test_non_20_ms_payload_raises_clear_error() -> None:
     with pytest.raises(TwilioMediaError, match="20 ms"):
         normalize_twilio_media_message(media_message(mulaw_base64(12000, sample_count=80)), session_id="twilio_CA123")
+
+
+def test_pcm16_encodes_to_mulaw_for_outbound_twilio_audio() -> None:
+    pcm16 = pcm16_payload(12000)
+    mulaw = encode_pcm16_to_mulaw(pcm16)
+    payload = encode_pcm16_to_mulaw_base64(pcm16)
+
+    assert len(mulaw) == 160
+    assert base64.b64decode(payload) == mulaw
+
+
+def test_outbound_mulaw_chunks_are_base64_20_ms_payloads() -> None:
+    chunks = chunk_mulaw_audio_for_twilio(b"\xff" * 320)
+
+    assert len(chunks) == 2
+    assert all(len(base64.b64decode(chunk)) == 160 for chunk in chunks)
+
+
+def test_twilio_outbound_media_and_mark_event_shapes() -> None:
+    media_event = build_twilio_media_event("MZ123", "abcd")
+    mark_event = build_twilio_mark_event("MZ123", "narayana_tts_test")
+
+    assert media_event == {
+        "event": "media",
+        "streamSid": "MZ123",
+        "media": {"payload": "abcd"},
+    }
+    assert mark_event == {
+        "event": "mark",
+        "streamSid": "MZ123",
+        "mark": {"name": "narayana_tts_test"},
+    }
+
+
+def test_estimate_audio_duration_for_mulaw_bytes() -> None:
+    assert estimate_audio_duration_ms(160) == 20
+    assert estimate_audio_duration_ms(0) == 0

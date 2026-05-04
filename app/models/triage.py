@@ -100,5 +100,8 @@ class AzureHealth(BaseModel):
     azure_openai_configured: bool
     azure_voice_live_configured: bool
     cosmos_configured: bool
+    twilio_tts_response_enabled: bool = False
+    azure_speech_tts_configured: bool = False
+    azure_speech_voice: str = "th-TH-PremwadeeNeural"
     missing_variables: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

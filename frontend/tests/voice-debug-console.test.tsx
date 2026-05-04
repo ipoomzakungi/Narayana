@@ -308,7 +308,15 @@ describe("VoiceDebugConsole", () => {
         missing_fields: ["injuries"],
         reason: "Critical intake fields are still missing.",
         guardrail_warnings: ["human_review:elderly_vulnerable"],
-        source_input_mode: "twilio_call"
+        source_input_mode: "twilio_call",
+        tts: {
+          enabled: true,
+          configured: true,
+          voice: "th-TH-PremwadeeNeural",
+          audio_format: "mulaw_8khz",
+          stream_sid_present: true,
+          warnings: ["tts sanitized"]
+        }
       });
     });
 
@@ -316,5 +324,8 @@ describe("VoiceDebugConsole", () => {
     expect(screen.getByText("มีใครบาดเจ็บไหมคะ?")).toBeInTheDocument();
     expect(screen.getAllByText("human_review:elderly_vulnerable").length).toBeGreaterThan(0);
     expect(screen.getAllByText("twilio_call").length).toBeGreaterThan(0);
+    expect(screen.getByText("enabled / configured")).toBeInTheDocument();
+    expect(screen.getByText("th-TH-PremwadeeNeural")).toBeInTheDocument();
+    expect(screen.getByText("tts sanitized")).toBeInTheDocument();
   });
 });
