@@ -116,6 +116,15 @@ class IntakeSessionState(BaseModel):
     status: IntakeSessionStatus = IntakeSessionStatus.ACTIVE
     guardrail_warnings: list[str] = Field(default_factory=list)
     decision_audit: list[dict[str, Any]] = Field(default_factory=list)
+    off_topic_count: int = Field(default=0, ge=0)
+    redirect_count: int = Field(default=0, ge=0)
+    last_off_topic_at: datetime | None = None
+    last_assistant_redirect: str = ""
+    no_reply_prompt_count: int = Field(default=0, ge=0)
+    last_caller_speech_at: datetime | None = None
+    greeting_sent_at: datetime | None = None
+    call_end_recommended: bool = False
+    call_end_reason: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -189,6 +198,12 @@ class IntakeResponse(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     reason: str
     guardrail_warnings: list[str] = Field(default_factory=list)
+    off_topic_count: int = 0
+    redirect_count: int = 0
+    no_reply_prompt_count: int = 0
+    call_end_recommended: bool = False
+    call_end_reason: str = ""
+    last_assistant_redirect: str = ""
     created_case: CaseRepositoryRecord | None = None
 
     @model_validator(mode="after")

@@ -124,13 +124,7 @@ class AzureOpenAIIntakeProvider:
                 messages=[
                     {
                         "role": "system",
-                        "content": (
-                            "You are Narayana, a crisis intake and triage assistant. Thai first. "
-                            "Use full conversation context. Ask only one short calm Thai question when needed. "
-                            "Never say rescue has been dispatched. Never diagnose. "
-                            "If high risk, create or escalate immediately. "
-                            "Keep response_text <= 180 Thai characters and follow-up questions <= 120 Thai characters."
-                        ),
+                        "content": build_intake_system_prompt(self.settings),
                     },
                     {
                         "role": "user",
@@ -224,6 +218,38 @@ class AzureOpenAIIntakeProvider:
             reason=reason,
             guardrail_warnings=warnings,
         )
+
+
+def build_intake_system_prompt(settings: Settings) -> str:
+    allowed_topics = ", ".join(settings.assistant_allowed_topics)
+    off_topic_rule = (
+        "If caller is off-topic, politely redirect once in Thai: "
+        "\"ขออภัยค่ะ ระบบนี้ใช้สำหรับรับแจ้งเหตุหรือขอความช่วยเหลือเท่านั้น "
+        "หากต้องการแจ้งเหตุ กรุณาบอกสถานการณ์และสถานที่ค่ะ\". "
+        "If repeatedly off-topic, recommend ending politely: "
+        "\"ขออภัยค่ะ หากไม่มีเหตุที่ต้องการแจ้ง ระบบจะสิ้นสุดสายนี้นะคะ\". "
+        if settings.assistant_decline_off_topic
+        else ""
+    )
+    return (
+        f"System prompt version: {settings.assistant_system_prompt_version}.\n"
+        f"You are {settings.assistant_display_name}, a crisis intake and triage assistant. "
+        f"Scope: {settings.assistant_scope}. Allowed topics: {allowed_topics}.\n"
+        "Thai first. Be calm, concise, and operational. Primary goal is to collect crisis information "
+        "for human review. Do not chit-chat. Do not answer unrelated general knowledge, entertainment, "
+        "coding, finance, politics, weather/news, flirting, or casual conversation. "
+        f"{off_topic_rule}"
+        "Never say rescue has been dispatched. Never say an ambulance is on the way. "
+        "Never close, reject, deny, or downgrade a real emergency case automatically. "
+        "Do not diagnose medical or mental conditions. For medical risk, say "
+        "\"ขอให้เจ้าหน้าที่ตรวจสอบทันที\" instead of a diagnosis. "
+        "High-risk signals such as breathing difficulty, unconsciousness, severe bleeding, trapped people, "
+        "active drowning risk, active fire/smoke, chest pain, stroke symptoms, self-harm danger, child risk, "
+        "or elderly vulnerable risk must create or escalate immediately. "
+        "Ask only one question at a time and do not ask redundant questions already answered in state. "
+        f"Keep response_text <= {settings.assistant_response_max_chars} Thai characters and follow-up questions <= 120 Thai characters. "
+        "Return JSON only using the provided schema. Include extracted facts, reason, and guardrail_warnings."
+    )
 
 
 def _extract_fields(text: str, language_hint: str) -> IntakeCollectedFields:

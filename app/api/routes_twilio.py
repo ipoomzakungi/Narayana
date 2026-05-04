@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import logging
 from urllib.parse import parse_qs
@@ -15,6 +16,8 @@ from app.models.triage import ProviderMode
 from app.models.tts import TTSProfile
 from app.services.audio_session_processor import AudioSessionProcessor
 from app.services.azure_speech_tts_service import AzureSpeechTTSService
+from app.services.call_lifecycle_service import CallLifecycleService, CallLifecycleState
+from app.services.intake_session_store import get_intake_session_store
 from app.services.twilio_audio_service import (
     TwilioMediaError,
     build_twilio_mark_event,
@@ -99,6 +102,8 @@ def _payload_response_text(payload: dict) -> str:
 
 
 def _tts_profile_for_payload(payload: dict) -> TTSProfile:
+    if payload.get("type") == "call.ending":
+        return TTSProfile.CLOSING
     if payload.get("type") == "intake.followup":
         return TTSProfile.FOLLOWUP
 
@@ -291,6 +296,86 @@ async def _send_initial_greeting(
     )
 
 
+def _scope_debug_fields(state) -> dict:
+    return {
+        "off_topic_count": getattr(state, "off_topic_count", 0),
+        "redirect_count": getattr(state, "redirect_count", 0),
+        "no_reply_prompt_count": getattr(state, "no_reply_prompt_count", 0),
+        "call_end_recommended": getattr(state, "call_end_recommended", False),
+        "call_end_reason": getattr(state, "call_end_reason", ""),
+        "last_assistant_redirect": getattr(state, "last_assistant_redirect", ""),
+        "guardrail_warnings": getattr(state, "guardrail_warnings", []),
+    }
+
+
+async def _send_no_reply_prompt(
+    websocket: WebSocket,
+    *,
+    settings,
+    lifecycle_service: CallLifecycleService,
+    lifecycle_state: CallLifecycleState,
+    stream_sid: str | None,
+    call_id: str,
+    session_id: str,
+) -> bool:
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.get_or_create(
+        session_id,
+        call_id=call_id,
+        source_input_mode=VoiceInputMode.TWILIO_CALL.value,
+        max_followups=settings.assistant_max_followups,
+    )
+
+    if lifecycle_service.should_close_for_no_reply(lifecycle_state):
+        response_text = lifecycle_service.record_no_reply_close(lifecycle_state)
+        state = store.mark_call_end_recommended(session_id, "no_reply", response_text)
+        state.no_reply_prompt_count = lifecycle_state.no_reply_prompt_count
+        store.save(state)
+        payload = {
+            "type": "call.ending",
+            "session_id": session_id,
+            "response_text": response_text,
+            **_scope_debug_fields(state),
+        }
+        await websocket.send_json(payload)
+        await _send_tts_media(
+            websocket,
+            settings=settings,
+            stream_sid=stream_sid,
+            text=response_text,
+            profile=TTSProfile.CLOSING,
+            call_id=call_id,
+            session_id=session_id,
+            purpose="call.no_reply_close",
+            mark_name="narayana_no_reply_close",
+        )
+        await websocket.close()
+        return True
+
+    if lifecycle_service.should_prompt_no_reply(lifecycle_state):
+        response_text = lifecycle_service.record_no_reply_prompt(lifecycle_state)
+        state = store.record_no_reply_prompt(session_id, response_text)
+        payload = {
+            "type": "call.no_reply_prompt",
+            "session_id": session_id,
+            "response_text": response_text,
+            **_scope_debug_fields(state),
+        }
+        await websocket.send_json(payload)
+        await _send_tts_media(
+            websocket,
+            settings=settings,
+            stream_sid=stream_sid,
+            text=response_text,
+            profile=TTSProfile.FOLLOWUP,
+            call_id=call_id,
+            session_id=session_id,
+            purpose="call.no_reply_prompt",
+            mark_name=f"narayana_no_reply_{lifecycle_state.no_reply_prompt_count}",
+        )
+    return False
+
+
 @router.websocket("/ws/telephony/twilio/{call_id}")
 async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
     await websocket.accept()
@@ -304,6 +389,8 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
     )
     metadata = _default_call_metadata(call_id)
     initial_greeting_attempted = False
+    lifecycle_service = CallLifecycleService(settings)
+    lifecycle_state = CallLifecycleState(session_id=session_id, call_id=call_id)
     processor = AudioSessionProcessor(
         settings=settings,
         session_id=session_id,
@@ -314,7 +401,24 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
     try:
         while True:
             try:
-                message = await websocket.receive_json()
+                timeout_seconds = lifecycle_service.next_timeout_seconds(lifecycle_state)
+                if timeout_seconds is None:
+                    message = await websocket.receive_json()
+                else:
+                    message = await asyncio.wait_for(websocket.receive_json(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                should_close = await _send_no_reply_prompt(
+                    websocket,
+                    settings=settings,
+                    lifecycle_service=lifecycle_service,
+                    lifecycle_state=lifecycle_state,
+                    stream_sid=stream_sid,
+                    call_id=call_id,
+                    session_id=session_id,
+                )
+                if should_close:
+                    return
+                continue
             except ValueError as exc:
                 await websocket.send_json({"type": "error", "detail": f"Malformed Twilio media message: {exc}"})
                 continue
@@ -332,6 +436,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                     source_input_mode=VoiceInputMode.TWILIO_CALL.value,
                     call_metadata=metadata,
                 )
+                lifecycle_state = CallLifecycleState(session_id=session_id, call_id=metadata.call_id)
                 await websocket.send_json(
                     {
                         "type": "session.started",
@@ -351,6 +456,17 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         call_id=call_id,
                         session_id=session_id,
                     )
+                if lifecycle_service.enabled:
+                    lifecycle_service.track_greeting_sent(lifecycle_state)
+                    store = get_intake_session_store(settings.assistant_max_followups)
+                    state = store.get_or_create(
+                        session_id,
+                        call_id=metadata.call_id,
+                        source_input_mode=VoiceInputMode.TWILIO_CALL.value,
+                        max_followups=settings.assistant_max_followups,
+                    )
+                    state.greeting_sent_at = lifecycle_state.greeting_sent_at
+                    store.save(state)
                 continue
 
             if event == "media":
@@ -364,7 +480,10 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                 except TwilioMediaError as exc:
                     await websocket.send_json({"type": "error", "detail": str(exc)})
                     continue
-                for payload in await processor.process_frame(frame):
+                processed_payloads = await processor.process_frame(frame)
+                if any(payload.get("type") in {"intake.followup", "triage.case.created"} for payload in processed_payloads):
+                    lifecycle_service.track_caller_speech(lifecycle_state)
+                for payload in processed_payloads:
                     payload = _with_tts_debug_metadata(payload, settings, stream_sid)
                     await websocket.send_json(payload)
                     await _maybe_send_tts_response(

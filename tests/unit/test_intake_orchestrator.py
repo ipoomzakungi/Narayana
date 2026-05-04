@@ -32,6 +32,69 @@ async def test_missing_location_asks_location(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_first_off_topic_redirects_without_case(tmp_path) -> None:
+    service = orchestrator(tmp_path)
+
+    response = await service.process_transcript(
+        IntakeRequest(session_id="session_off_topic", transcript="เล่าเรื่องตลกให้ฟังหน่อย", source_input_mode="manual")
+    )
+
+    assert response.action == IntakeAction.ASK_FOLLOWUP
+    assert response.created_case is None
+    assert response.off_topic_count == 1
+    assert response.redirect_count == 1
+    assert response.call_end_recommended is False
+    assert response.response_text.startswith("ขออภัยค่ะ ระบบนี้ใช้สำหรับรับแจ้งเหตุ")
+    assert "scope:off_topic_redirect" in response.guardrail_warnings
+
+
+@pytest.mark.asyncio
+async def test_repeated_off_topic_recommends_call_close(tmp_path) -> None:
+    service = orchestrator(tmp_path)
+
+    first = await service.process_transcript(
+        IntakeRequest(session_id="session_repeat", transcript="เล่าเรื่องตลก", source_input_mode="manual")
+    )
+    second = await service.process_transcript(
+        IntakeRequest(session_id="session_repeat", transcript="คุยเล่นกับฉันหน่อย", source_input_mode="manual")
+    )
+    third = await service.process_transcript(
+        IntakeRequest(session_id="session_repeat", transcript="ช่วยเขียนโค้ด Python", source_input_mode="manual")
+    )
+
+    assert first.call_end_recommended is False
+    assert second.call_end_recommended is False
+    assert third.call_end_recommended is True
+    assert third.call_end_reason == "repeated_off_topic"
+    assert third.created_case is None
+    assert "ระบบจะสิ้นสุดสายนี้" in third.response_text
+    assert "scope:repeated_off_topic_close_recommended" in third.guardrail_warnings
+
+
+@pytest.mark.asyncio
+async def test_emergency_after_off_topic_resets_scope_and_escalates(tmp_path) -> None:
+    service = orchestrator(tmp_path)
+    await service.process_transcript(
+        IntakeRequest(session_id="session_override", transcript="เล่าเรื่องตลก", source_input_mode="manual")
+    )
+
+    response = await service.process_transcript(
+        IntakeRequest(
+            session_id="session_override",
+            transcript="ช่วยด้วย น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง",
+            source_input_mode="manual",
+        )
+    )
+
+    assert response.action == IntakeAction.ESCALATE_HUMAN_REVIEW
+    assert response.triage_level == "RED"
+    assert response.created_case is not None
+    assert response.off_topic_count == 0
+    assert response.call_end_recommended is False
+    assert "scope:emergency_override" in response.partial_state.guardrail_warnings
+
+
+@pytest.mark.asyncio
 async def test_known_location_asks_injury_question_without_repeating_location(tmp_path) -> None:
     service = orchestrator(tmp_path)
 

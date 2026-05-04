@@ -17,6 +17,7 @@ from app.services.azure_openai_intake_provider import AzureOpenAIIntakeProvider
 from app.services.case_grouping_service import group_case, group_requires_human_review
 from app.services.case_repository import get_case_repository
 from app.services.intake_guardrails import evaluate_intake_guardrails, response_mentions_forbidden_dispatch
+from app.services.intake_scope_guardrails import classify_scope
 from app.services.intake_session_store import IntakeSessionStore, get_intake_session_store
 from app.services.safety_rules import apply_safety_rules
 
@@ -43,6 +44,12 @@ class IntakeOrchestrator:
             state.collected_fields.caller_phone_optional = request.caller_phone_optional
 
         self.store.append_caller_turn(request.session_id, request.transcript)
+        scope = classify_scope(request.transcript, state, self.settings)
+        if scope.is_emergency_signal:
+            self._reset_scope_state_for_emergency(state, scope.guardrail_warnings)
+        elif scope.is_off_topic:
+            return self._off_topic_response(state, scope)
+
         guardrails = evaluate_intake_guardrails(request.transcript, state)
         decision = await self.provider.decide(state, request.transcript, guardrails)
         decision = self._enforce_decision(decision, state, guardrails)
@@ -91,8 +98,78 @@ class IntakeOrchestrator:
             missing_fields=decision.missing_fields,
             reason=decision.reason,
             guardrail_warnings=decision.guardrail_warnings,
+            off_topic_count=state.off_topic_count,
+            redirect_count=state.redirect_count,
+            no_reply_prompt_count=state.no_reply_prompt_count,
+            call_end_recommended=state.call_end_recommended,
+            call_end_reason=state.call_end_reason,
+            last_assistant_redirect=state.last_assistant_redirect,
             created_case=created_case,
         )
+
+    def _off_topic_response(self, state: IntakeSessionState, scope) -> IntakeResponse:
+        state.off_topic_count += 1
+        state.redirect_count += 1
+        state.last_off_topic_at = state.updated_at
+        state.last_assistant_redirect = scope.response_text
+        state.call_end_recommended = scope.call_end_recommended
+        state.call_end_reason = "repeated_off_topic" if scope.call_end_recommended else ""
+        state.guardrail_warnings = _merge_unique(state.guardrail_warnings, scope.guardrail_warnings)
+        state.status = IntakeSessionStatus.WAITING_FOR_FOLLOWUP
+        self.store.append_assistant_turn(state.session_id, scope.response_text)
+        state.decision_audit.append(
+            {
+                "action": "scope_off_topic",
+                "off_topic_count": state.off_topic_count,
+                "redirect_count": state.redirect_count,
+                "call_end_recommended": state.call_end_recommended,
+                "call_end_reason": state.call_end_reason,
+                "reason": scope.reason,
+                "matched_terms": scope.matched_terms,
+                "guardrail_warnings": scope.guardrail_warnings,
+            }
+        )
+        self.store.save(state)
+        return IntakeResponse(
+            session_id=state.session_id,
+            action=IntakeAction.ASK_FOLLOWUP,
+            response_text=scope.response_text,
+            partial_state=state,
+            case_group=CaseGroup.UNKNOWN_HUMAN_REVIEW,
+            recommended_team="human_review",
+            triage_level=TriageLevel.GREEN,
+            human_review_required=False,
+            missing_fields=[],
+            reason=scope.reason,
+            guardrail_warnings=scope.guardrail_warnings,
+            off_topic_count=state.off_topic_count,
+            redirect_count=state.redirect_count,
+            no_reply_prompt_count=state.no_reply_prompt_count,
+            call_end_recommended=state.call_end_recommended,
+            call_end_reason=state.call_end_reason,
+            last_assistant_redirect=state.last_assistant_redirect,
+            created_case=None,
+        )
+
+    def _reset_scope_state_for_emergency(self, state: IntakeSessionState, warnings: list[str]) -> None:
+        if state.off_topic_count or state.call_end_recommended:
+            state.decision_audit.append(
+                {
+                    "action": "scope_emergency_override",
+                    "previous_off_topic_count": state.off_topic_count,
+                    "previous_call_end_recommended": state.call_end_recommended,
+                    "guardrail_warnings": warnings,
+                }
+            )
+        state.off_topic_count = 0
+        state.redirect_count = 0
+        state.last_off_topic_at = None
+        state.last_assistant_redirect = ""
+        if state.call_end_reason == "repeated_off_topic":
+            state.call_end_recommended = False
+            state.call_end_reason = ""
+        state.guardrail_warnings = _merge_unique(state.guardrail_warnings, warnings)
+        self.store.save(state)
 
     def _enforce_decision(
         self,

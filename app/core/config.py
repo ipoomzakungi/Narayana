@@ -5,8 +5,21 @@ import os
 from functools import lru_cache
 
 DEFAULT_CORS_ALLOW_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
+DEFAULT_ASSISTANT_DISPLAY_NAME = "ระบบช่วยรับแจ้งเหตุ"
 DEFAULT_TWILIO_INITIAL_GREETING = (
-    "สวัสดีค่ะ นารายานาพร้อมรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ"
+    "สวัสดีค่ะ นี่คือระบบช่วยรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ"
+)
+DEFAULT_ASSISTANT_ALLOWED_TOPICS = (
+    "emergency",
+    "medical",
+    "flood",
+    "fire",
+    "accident",
+    "public_safety",
+    "tourist_support",
+    "mental_health_crisis",
+    "utility_infrastructure",
+    "shelter_supplies",
 )
 
 
@@ -61,7 +74,19 @@ class Settings:
     assistant_max_followups: int = 3
     assistant_question_style: str = "single_short_question"
     assistant_name: str = "Narayana"
+    assistant_display_name: str = DEFAULT_ASSISTANT_DISPLAY_NAME
+    assistant_system_prompt_version: str = "v1"
+    assistant_scope: str = "crisis_intake_only"
+    assistant_allowed_topics: tuple[str, ...] = DEFAULT_ASSISTANT_ALLOWED_TOPICS
+    assistant_decline_off_topic: bool = True
     assistant_response_max_chars: int = 180
+    call_no_reply_seconds: float = 10.0
+    call_no_reply_prompt_seconds: float = 15.0
+    call_max_no_reply_prompts: int = 2
+    call_max_off_topic_redirects: int = 2
+    call_end_on_repeated_off_topic: bool = True
+    call_end_on_no_reply: bool = True
+    twilio_force_hangup_enabled: bool = False
     enable_twilio_tts_response: bool = False
     enable_twilio_initial_greeting: bool = False
     twilio_initial_greeting_text: str = DEFAULT_TWILIO_INITIAL_GREETING
@@ -76,9 +101,11 @@ class Settings:
     tts_rate_greeting: str = "-5%"
     tts_rate_red: str = "-12%"
     tts_rate_unclear: str = "-8%"
+    tts_rate_closing: str = "-8%"
     tts_pitch_normal: str = "0%"
     tts_pitch_greeting: str = "0%"
     tts_pitch_red: str = "-2%"
+    tts_pitch_closing: str = "0%"
     tts_volume: str = "medium"
 
     @classmethod
@@ -118,7 +145,19 @@ class Settings:
             assistant_max_followups=int(os.getenv("ASSISTANT_MAX_FOLLOWUPS", "3")),
             assistant_question_style=os.getenv("ASSISTANT_QUESTION_STYLE", "single_short_question"),
             assistant_name=os.getenv("ASSISTANT_NAME", "Narayana"),
+            assistant_display_name=os.getenv("ASSISTANT_DISPLAY_NAME", DEFAULT_ASSISTANT_DISPLAY_NAME),
+            assistant_system_prompt_version=os.getenv("ASSISTANT_SYSTEM_PROMPT_VERSION", "v1"),
+            assistant_scope=os.getenv("ASSISTANT_SCOPE", "crisis_intake_only"),
+            assistant_allowed_topics=_csv(os.getenv("ASSISTANT_ALLOWED_TOPICS"), DEFAULT_ASSISTANT_ALLOWED_TOPICS),
+            assistant_decline_off_topic=_truthy(os.getenv("ASSISTANT_DECLINE_OFF_TOPIC"), default=True),
             assistant_response_max_chars=int(os.getenv("ASSISTANT_RESPONSE_MAX_CHARS", "180")),
+            call_no_reply_seconds=float(os.getenv("CALL_NO_REPLY_SECONDS", "10")),
+            call_no_reply_prompt_seconds=float(os.getenv("CALL_NO_REPLY_PROMPT_SECONDS", "15")),
+            call_max_no_reply_prompts=int(os.getenv("CALL_MAX_NO_REPLY_PROMPTS", "2")),
+            call_max_off_topic_redirects=int(os.getenv("CALL_MAX_OFF_TOPIC_REDIRECTS", "2")),
+            call_end_on_repeated_off_topic=_truthy(os.getenv("CALL_END_ON_REPEATED_OFF_TOPIC"), default=True),
+            call_end_on_no_reply=_truthy(os.getenv("CALL_END_ON_NO_REPLY"), default=True),
+            twilio_force_hangup_enabled=_truthy(os.getenv("TWILIO_FORCE_HANGUP_ENABLED"), default=False),
             enable_twilio_tts_response=_truthy(os.getenv("ENABLE_TWILIO_TTS_RESPONSE"), default=False),
             enable_twilio_initial_greeting=_truthy(os.getenv("ENABLE_TWILIO_INITIAL_GREETING"), default=False),
             twilio_initial_greeting_text=os.getenv("TWILIO_INITIAL_GREETING_TEXT", DEFAULT_TWILIO_INITIAL_GREETING),
@@ -136,9 +175,11 @@ class Settings:
             tts_rate_greeting=os.getenv("TTS_RATE_GREETING", "-5%"),
             tts_rate_red=os.getenv("TTS_RATE_RED", "-12%"),
             tts_rate_unclear=os.getenv("TTS_RATE_UNCLEAR", "-8%"),
+            tts_rate_closing=os.getenv("TTS_RATE_CLOSING", "-8%"),
             tts_pitch_normal=os.getenv("TTS_PITCH_NORMAL", "0%"),
             tts_pitch_greeting=os.getenv("TTS_PITCH_GREETING", "0%"),
             tts_pitch_red=os.getenv("TTS_PITCH_RED", "-2%"),
+            tts_pitch_closing=os.getenv("TTS_PITCH_CLOSING", "0%"),
             tts_volume=os.getenv("TTS_VOLUME", "medium"),
         )
 

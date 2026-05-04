@@ -45,6 +45,85 @@ async def test_intake_from_transcript_asks_followup_for_incomplete_flood(app_wit
 
 
 @pytest.mark.asyncio
+async def test_intake_first_off_topic_redirect_contract(app_with_tmp_store) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app_with_tmp_store), base_url="http://test") as client:
+        response = await client.post(
+            "/api/intake/from-transcript",
+            json={
+                "session_id": "scope-session",
+                "transcript": "เล่าเรื่องตลกให้ฟังหน่อย",
+                "language_hint": "th",
+                "source_input_mode": "manual",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "ask_followup"
+    assert payload["created_case"] is None
+    assert payload["off_topic_count"] == 1
+    assert payload["redirect_count"] == 1
+    assert payload["partial_state"]["off_topic_count"] == 1
+    assert payload["call_end_recommended"] is False
+    assert payload["response_text"].startswith("ขออภัยค่ะ ระบบนี้ใช้สำหรับรับแจ้งเหตุ")
+    assert "scope:off_topic_redirect" in payload["guardrail_warnings"]
+
+
+@pytest.mark.asyncio
+async def test_intake_repeated_off_topic_close_recommendation(app_with_tmp_store) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app_with_tmp_store), base_url="http://test") as client:
+        for transcript in ["เล่าเรื่องตลก", "คุยเล่นกับฉันหน่อย", "ช่วยเขียนโค้ด Python"]:
+            response = await client.post(
+                "/api/intake/from-transcript",
+                json={
+                    "session_id": "repeat-session",
+                    "transcript": transcript,
+                    "language_hint": "th",
+                    "source_input_mode": "manual",
+                },
+            )
+        payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["created_case"] is None
+    assert payload["off_topic_count"] == 3
+    assert payload["call_end_recommended"] is True
+    assert payload["call_end_reason"] == "repeated_off_topic"
+    assert "ระบบจะสิ้นสุดสายนี้" in payload["response_text"]
+
+
+@pytest.mark.asyncio
+async def test_intake_emergency_override_after_off_topic(app_with_tmp_store) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app_with_tmp_store), base_url="http://test") as client:
+        await client.post(
+            "/api/intake/from-transcript",
+            json={
+                "session_id": "override-session",
+                "transcript": "เล่าเรื่องตลก",
+                "language_hint": "th",
+                "source_input_mode": "manual",
+            },
+        )
+        response = await client.post(
+            "/api/intake/from-transcript",
+            json={
+                "session_id": "override-session",
+                "transcript": "ช่วยด้วย น้ำท่วมอยู่ที่หาดใหญ่ มีคนแก่หายใจลำบาก ติดอยู่ชั้นสอง",
+                "language_hint": "th",
+                "source_input_mode": "manual",
+            },
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["triage_level"] == "RED"
+    assert payload["created_case"] is not None
+    assert payload["off_topic_count"] == 0
+    assert payload["call_end_recommended"] is False
+    assert "scope:emergency_override" in payload["partial_state"]["guardrail_warnings"]
+
+
+@pytest.mark.asyncio
 async def test_intake_from_transcript_creates_red_case_for_thai_sample(app_with_tmp_store) -> None:
     async with AsyncClient(transport=ASGITransport(app=app_with_tmp_store), base_url="http://test") as client:
         response = await client.post(

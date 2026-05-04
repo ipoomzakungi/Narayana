@@ -104,6 +104,17 @@ class AzureHealth(BaseModel):
     twilio_initial_greeting_enabled: bool = False
     twilio_initial_greeting_text_configured: bool = False
     twilio_initial_greeting_profile: str = "greeting"
+    assistant_display_name: str = "ระบบช่วยรับแจ้งเหตุ"
+    assistant_system_prompt_version: str = "v1"
+    assistant_scope: str = "crisis_intake_only"
+    assistant_decline_off_topic: bool = True
+    call_no_reply_seconds: float = 10.0
+    call_no_reply_prompt_seconds: float = 15.0
+    call_max_no_reply_prompts: int = 2
+    call_max_off_topic_redirects: int = 2
+    call_end_on_repeated_off_topic: bool = True
+    call_end_on_no_reply: bool = True
+    twilio_force_hangup_enabled: bool = False
     azure_speech_tts_configured: bool = False
     azure_speech_voice: str = "th-TH-PremwadeeNeural"
     tts_use_ssml: bool = True

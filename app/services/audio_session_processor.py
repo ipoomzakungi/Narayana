@@ -22,6 +22,18 @@ def event_payload(event: AudioDebugEvent) -> dict:
     return {"type": "debug.event", "event": event.model_dump(mode="json")}
 
 
+def _scope_debug_fields(intake_response: IntakeResponse) -> dict:
+    state = intake_response.partial_state
+    return {
+        "off_topic_count": intake_response.off_topic_count or state.off_topic_count,
+        "redirect_count": intake_response.redirect_count or state.redirect_count,
+        "no_reply_prompt_count": intake_response.no_reply_prompt_count or state.no_reply_prompt_count,
+        "call_end_recommended": intake_response.call_end_recommended or state.call_end_recommended,
+        "call_end_reason": intake_response.call_end_reason or state.call_end_reason,
+        "last_assistant_redirect": intake_response.last_assistant_redirect or state.last_assistant_redirect,
+    }
+
+
 class AudioSessionProcessor:
     def __init__(
         self,
@@ -202,6 +214,7 @@ class AudioSessionProcessor:
                 "provider_mode": provider_mode.value,
                 "transcript_source": transcript_source,
                 "audio_ref": audio_ref,
+                **_scope_debug_fields(intake_response),
             }
         else:
             record = intake_response.created_case
@@ -230,6 +243,7 @@ class AudioSessionProcessor:
                     "guardrail_warnings": intake_response.guardrail_warnings,
                     "partial_state": intake_response.partial_state.model_dump(mode="json"),
                 },
+                **_scope_debug_fields(intake_response),
             }
 
         if self.source_input_mode:
