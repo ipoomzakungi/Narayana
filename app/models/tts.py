@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, PrivateAttr, field_validator
 class TTSProfile(StrEnum):
     NORMAL = "normal"
     FOLLOWUP = "followup"
+    GREETING = "greeting"
     RED = "red"
     UNCLEAR = "unclear"
     SAFE_FALLBACK = "safe_fallback"

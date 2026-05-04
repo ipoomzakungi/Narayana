@@ -148,6 +148,15 @@ def test_followup_profile_uses_configured_rate() -> None:
     assert 'pitch="0%"' in ssml
 
 
+def test_greeting_profile_uses_configured_rate_and_pitch() -> None:
+    service = AzureSpeechTTSService(Settings(tts_rate_greeting="-6%", tts_pitch_greeting="-1%"))
+
+    ssml = service.build_ssml("สวัสดีค่ะ แจ้งเหตุได้เลยค่ะ", "th-TH-PremwadeeNeural", TTSProfile.GREETING)
+
+    assert 'rate="-6%"' in ssml
+    assert 'pitch="-1%"' in ssml
+
+
 @pytest.mark.asyncio
 async def test_unsafe_dispatch_phrase_is_replaced_before_ssml() -> None:
     captured: dict[str, str] = {}
@@ -164,6 +173,28 @@ async def test_unsafe_dispatch_phrase_is_replaced_before_ssml() -> None:
 
     assert captured["text"] == SAFE_SPOKEN_RESPONSE
     assert "รถพยาบาลกำลังไป" not in captured["ssml"]
+    assert result.profile == TTSProfile.SAFE_FALLBACK
+
+
+@pytest.mark.asyncio
+async def test_unsafe_official_hotline_greeting_is_replaced_before_ssml() -> None:
+    captured: dict[str, str] = {}
+
+    class MockService(AzureSpeechTTSService):
+        async def _synthesize_audio_bytes(self, text: str, voice: str, profile: TTSProfile):
+            captured["text"] = text
+            captured["ssml"] = self.build_ssml(text, voice, profile)
+            return b"\xff" * 160, True, []
+
+    result = await MockService(
+        Settings(azure_speech_key="key", azure_speech_region="eastus")
+    ).synthesize_twilio_mulaw(
+        "นี่คือ official emergency hotline replacement",
+        profile=TTSProfile.GREETING,
+    )
+
+    assert captured["text"] == SAFE_SPOKEN_RESPONSE
+    assert "official emergency hotline" not in captured["ssml"]
     assert result.profile == TTSProfile.SAFE_FALLBACK
 
 

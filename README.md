@@ -144,15 +144,21 @@ Default safe settings:
 
 ```dotenv
 ENABLE_TWILIO_TTS_RESPONSE=false
+ENABLE_TWILIO_INITIAL_GREETING=false
+TWILIO_INITIAL_GREETING_TEXT=สวัสดีค่ะ นารายานาพร้อมรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ
+TWILIO_INITIAL_GREETING_PROFILE=greeting
+TWILIO_INITIAL_GREETING_FALLBACK_SAY=false
 AZURE_SPEECH_VOICE=th-TH-PremwadeeNeural
 TTS_MAX_CHARS=220
 TTS_OUTPUT_FORMAT=mulaw_8khz
 TTS_USE_SSML=true
 TTS_RATE_NORMAL=0%
 TTS_RATE_FOLLOWUP=-5%
+TTS_RATE_GREETING=-5%
 TTS_RATE_RED=-12%
 TTS_RATE_UNCLEAR=-8%
 TTS_PITCH_NORMAL=0%
+TTS_PITCH_GREETING=0%
 TTS_PITCH_RED=-2%
 TTS_VOLUME=medium
 ```
@@ -163,6 +169,9 @@ To enable a real-call test, configure Azure Speech and turn on both multi-turn i
 $env:USE_MOCK_SERVICES="true"
 $env:ENABLE_MULTI_TURN_INTAKE="true"
 $env:ENABLE_TWILIO_TTS_RESPONSE="true"
+$env:ENABLE_TWILIO_INITIAL_GREETING="true"
+$env:TWILIO_INITIAL_GREETING_TEXT="สวัสดีค่ะ นารายานาพร้อมรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ"
+$env:TWILIO_INITIAL_GREETING_PROFILE="greeting"
 $env:AZURE_SPEECH_KEY="<secret>"
 $env:AZURE_SPEECH_REGION="<region>"
 $env:AZURE_SPEECH_VOICE="th-TH-PremwadeeNeural"
@@ -178,6 +187,16 @@ Invoke-RestMethod `
   -Body '{"text":"ตอนนี้อยู่จุดไหนหรือใกล้สถานที่สำคัญอะไรคะ?","profile":"followup"}'
 ```
 
+Check the initial greeting profile the same way:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8000/api/tts/test" `
+  -ContentType "application/json" `
+  -Body '{"text":"สวัสดีค่ะ นารายานาพร้อมรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ","profile":"greeting"}'
+```
+
 Expected when configured:
 
 - `configured=true`
@@ -190,6 +209,9 @@ Expected when configured:
 Health includes:
 
 - `twilio_tts_response_enabled`
+- `twilio_initial_greeting_enabled`
+- `twilio_initial_greeting_text_configured`
+- `twilio_initial_greeting_profile`
 - `azure_speech_tts_configured`
 - `azure_speech_voice`
 - `tts_use_ssml`
@@ -197,7 +219,9 @@ Health includes:
 
 During a Twilio call, the backend still sends the normal JSON debug or case payload first. If speak-back is enabled, configured, and the payload has safe `response_text`, the backend sends Twilio `media` chunks followed by a Twilio `mark` event. Logs include `tts.started`, `tts.completed`, or `tts.failed`, chunk count, stream ID, and duration estimate. Logs must not include secrets or raw audio payloads.
 
-SSML is enabled by default for Azure Speech TTS. Narayana uses only `prosody` rate, pitch, and volume controls rather than style names, so the voice remains compatible with Thai neural voices. Profiles are selected from the Twilio payload: follow-up questions use `followup`, RED or human-escalation responses use `red`, unclear/fallback transcript responses use `unclear`, and sanitized unsafe text uses `safe_fallback`.
+Initial greeting speak-back is separate from response speak-back. When `ENABLE_TWILIO_INITIAL_GREETING=true`, Narayana speaks the configured Thai greeting once after the Twilio stream starts, then continues listening. Watch Container App logs for `greeting.started` and `greeting.completed`; if synthesis is unavailable or fails, `greeting.failed` is logged and the call continues.
+
+SSML is enabled by default for Azure Speech TTS. Narayana uses only `prosody` rate, pitch, and volume controls rather than style names, so the voice remains compatible with Thai neural voices. Profiles are selected from the Twilio payload: the initial greeting uses `greeting`, follow-up questions use `followup`, RED or human-escalation responses use `red`, unclear/fallback transcript responses use `unclear`, and sanitized unsafe text uses `safe_fallback`.
 
 Spoken text is sanitized before synthesis. Narayana must not say rescue was dispatched, an ambulance is on the way, give a diagnosis, close/reject an emergency, or provide long unsafe guidance. If synthesis fails, the call continues and case creation or follow-up output is not blocked.
 

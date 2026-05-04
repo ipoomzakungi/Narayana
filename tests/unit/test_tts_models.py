@@ -3,12 +3,18 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.models.tts import TTSTestResponse, TTSRequest, TTSResult
+from app.models.tts import TTSTestResponse, TTSProfile, TTSRequest, TTSResult
 
 
 def test_tts_request_rejects_blank_text() -> None:
     with pytest.raises(ValidationError):
         TTSRequest(text="   ")
+
+
+def test_tts_request_accepts_greeting_profile() -> None:
+    request = TTSRequest(text="สวัสดีค่ะ", profile="greeting")
+
+    assert request.profile == TTSProfile.GREETING
 
 
 def test_tts_result_keeps_payloads_out_of_public_dump() -> None:

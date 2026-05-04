@@ -15,15 +15,23 @@ def test_telephony_defaults_keep_local_mic_and_no_provider() -> None:
     assert settings.assistant_max_followups == 3
     assert settings.assistant_name == "Narayana"
     assert settings.enable_twilio_tts_response is False
+    assert settings.enable_twilio_initial_greeting is False
+    assert settings.twilio_initial_greeting_text == (
+        "สวัสดีค่ะ นารายานาพร้อมรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ"
+    )
+    assert settings.twilio_initial_greeting_profile == "greeting"
+    assert settings.twilio_initial_greeting_fallback_say is False
     assert settings.azure_speech_voice == "th-TH-PremwadeeNeural"
     assert settings.tts_max_chars == 220
     assert settings.tts_output_format == "mulaw_8khz"
     assert settings.tts_use_ssml is True
     assert settings.tts_rate_normal == "0%"
     assert settings.tts_rate_followup == "-5%"
+    assert settings.tts_rate_greeting == "-5%"
     assert settings.tts_rate_red == "-12%"
     assert settings.tts_rate_unclear == "-8%"
     assert settings.tts_pitch_normal == "0%"
+    assert settings.tts_pitch_greeting == "0%"
     assert settings.tts_pitch_red == "-2%"
     assert settings.tts_volume == "medium"
     assert settings.twilio_configured is False
@@ -58,24 +66,36 @@ def test_missing_phone_provider_credentials_do_not_affect_selected_voice_provide
 
 def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> None:
     monkeypatch.setenv("ENABLE_TWILIO_TTS_RESPONSE", "true")
+    monkeypatch.setenv("ENABLE_TWILIO_INITIAL_GREETING", "true")
+    monkeypatch.setenv("TWILIO_INITIAL_GREETING_TEXT", "สวัสดีค่ะ แจ้งเหตุได้เลยค่ะ")
+    monkeypatch.setenv("TWILIO_INITIAL_GREETING_PROFILE", "greeting")
+    monkeypatch.setenv("TWILIO_INITIAL_GREETING_FALLBACK_SAY", "true")
     monkeypatch.setenv("AZURE_SPEECH_VOICE", "th-TH-TestVoice")
     monkeypatch.setenv("TTS_MAX_CHARS", "120")
     monkeypatch.setenv("TTS_OUTPUT_FORMAT", "mulaw_8khz")
     monkeypatch.setenv("TTS_USE_SSML", "false")
     monkeypatch.setenv("TTS_RATE_FOLLOWUP", "-9%")
+    monkeypatch.setenv("TTS_RATE_GREETING", "-6%")
     monkeypatch.setenv("TTS_RATE_RED", "-15%")
+    monkeypatch.setenv("TTS_PITCH_GREETING", "-1%")
     monkeypatch.setenv("TTS_VOLUME", "soft")
     reset_settings_cache()
 
     settings = Settings.from_env()
 
     assert settings.enable_twilio_tts_response is True
+    assert settings.enable_twilio_initial_greeting is True
+    assert settings.twilio_initial_greeting_text == "สวัสดีค่ะ แจ้งเหตุได้เลยค่ะ"
+    assert settings.twilio_initial_greeting_profile == "greeting"
+    assert settings.twilio_initial_greeting_fallback_say is True
     assert settings.azure_speech_voice == "th-TH-TestVoice"
     assert settings.tts_max_chars == 120
     assert settings.tts_output_format == "mulaw_8khz"
     assert settings.tts_use_ssml is False
     assert settings.tts_rate_followup == "-9%"
+    assert settings.tts_rate_greeting == "-6%"
     assert settings.tts_rate_red == "-15%"
+    assert settings.tts_pitch_greeting == "-1%"
     assert settings.tts_volume == "soft"
     assert settings.azure_speech_tts_configured is False
     assert settings.missing_azure_speech_tts_variables() == ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"]

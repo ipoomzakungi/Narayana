@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
+from app.models.tts import TTSProfile, TTSResult
 
 
 def test_twilio_webhook_returns_config_error_without_public_base_url(monkeypatch) -> None:
@@ -69,6 +70,73 @@ class FakeWebSocket:
 
 
 @pytest.mark.asyncio
+async def test_send_tts_media_sends_media_and_mark(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    class MockTTSService:
+        configured = True
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        def missing_variables(self):
+            return []
+
+        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None, profile="normal"):
+            assert text == "สวัสดีค่ะ"
+            assert profile == TTSProfile.GREETING
+            return TTSResult(
+                configured=True,
+                voice="th-TH-PremwadeeNeural",
+                profile=profile,
+                total_bytes=320,
+                estimated_duration_ms=40,
+            ).with_payloads(["abcd", "efgh"])
+
+    monkeypatch.setattr(routes_twilio, "AzureSpeechTTSService", MockTTSService)
+    websocket = FakeWebSocket()
+
+    await routes_twilio._send_tts_media(
+        websocket,
+        settings=Settings(azure_speech_key="key", azure_speech_region="eastus"),
+        stream_sid="MZ123",
+        text="สวัสดีค่ะ",
+        profile=TTSProfile.GREETING,
+        call_id="CA123",
+        session_id="twilio_CA123",
+        purpose="greeting",
+        mark_name="narayana_initial_greeting",
+    )
+
+    assert websocket.sent == [
+        {"event": "media", "streamSid": "MZ123", "media": {"payload": "abcd"}},
+        {"event": "media", "streamSid": "MZ123", "media": {"payload": "efgh"}},
+        {"event": "mark", "streamSid": "MZ123", "mark": {"name": "narayana_initial_greeting"}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_tts_media_skips_when_unconfigured() -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    websocket = FakeWebSocket()
+
+    await routes_twilio._send_tts_media(
+        websocket,
+        settings=Settings(),
+        stream_sid="MZ123",
+        text="สวัสดีค่ะ",
+        profile=TTSProfile.GREETING,
+        call_id="CA123",
+        session_id="twilio_CA123",
+        purpose="greeting",
+        mark_name="narayana_initial_greeting",
+    )
+
+    assert websocket.sent == []
+
+
+@pytest.mark.asyncio
 async def test_twilio_tts_skips_when_stream_sid_missing() -> None:
     import app.api.routes_twilio as routes_twilio
 
@@ -83,6 +151,40 @@ async def test_twilio_tts_skips_when_stream_sid_missing() -> None:
             azure_speech_region="eastus",
         ),
         stream_sid=None,
+        call_id="CA123",
+        session_id="twilio_CA123",
+    )
+
+    assert websocket.sent == []
+
+
+@pytest.mark.asyncio
+async def test_initial_greeting_failure_does_not_raise_or_send_audio(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    class FailingTTSService:
+        configured = True
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        def missing_variables(self):
+            return []
+
+        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None, profile="normal"):
+            raise RuntimeError("tts unavailable")
+
+    monkeypatch.setattr(routes_twilio, "AzureSpeechTTSService", FailingTTSService)
+    websocket = FakeWebSocket()
+
+    await routes_twilio._send_initial_greeting(
+        websocket,
+        settings=Settings(
+            enable_twilio_initial_greeting=True,
+            azure_speech_key="key",
+            azure_speech_region="eastus",
+        ),
+        stream_sid="MZ123",
         call_id="CA123",
         session_id="twilio_CA123",
     )

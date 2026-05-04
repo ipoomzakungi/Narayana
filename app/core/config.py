@@ -5,6 +5,9 @@ import os
 from functools import lru_cache
 
 DEFAULT_CORS_ALLOW_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
+DEFAULT_TWILIO_INITIAL_GREETING = (
+    "สวัสดีค่ะ นารายานาพร้อมรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ"
+)
 
 
 def _truthy(value: str | None, default: bool = False) -> bool:
@@ -60,15 +63,21 @@ class Settings:
     assistant_name: str = "Narayana"
     assistant_response_max_chars: int = 180
     enable_twilio_tts_response: bool = False
+    enable_twilio_initial_greeting: bool = False
+    twilio_initial_greeting_text: str = DEFAULT_TWILIO_INITIAL_GREETING
+    twilio_initial_greeting_profile: str = "greeting"
+    twilio_initial_greeting_fallback_say: bool = False
     azure_speech_voice: str = "th-TH-PremwadeeNeural"
     tts_max_chars: int = 220
     tts_output_format: str = "mulaw_8khz"
     tts_use_ssml: bool = True
     tts_rate_normal: str = "0%"
     tts_rate_followup: str = "-5%"
+    tts_rate_greeting: str = "-5%"
     tts_rate_red: str = "-12%"
     tts_rate_unclear: str = "-8%"
     tts_pitch_normal: str = "0%"
+    tts_pitch_greeting: str = "0%"
     tts_pitch_red: str = "-2%"
     tts_volume: str = "medium"
 
@@ -111,15 +120,24 @@ class Settings:
             assistant_name=os.getenv("ASSISTANT_NAME", "Narayana"),
             assistant_response_max_chars=int(os.getenv("ASSISTANT_RESPONSE_MAX_CHARS", "180")),
             enable_twilio_tts_response=_truthy(os.getenv("ENABLE_TWILIO_TTS_RESPONSE"), default=False),
+            enable_twilio_initial_greeting=_truthy(os.getenv("ENABLE_TWILIO_INITIAL_GREETING"), default=False),
+            twilio_initial_greeting_text=os.getenv("TWILIO_INITIAL_GREETING_TEXT", DEFAULT_TWILIO_INITIAL_GREETING),
+            twilio_initial_greeting_profile=os.getenv("TWILIO_INITIAL_GREETING_PROFILE", "greeting"),
+            twilio_initial_greeting_fallback_say=_truthy(
+                os.getenv("TWILIO_INITIAL_GREETING_FALLBACK_SAY"),
+                default=False,
+            ),
             azure_speech_voice=os.getenv("AZURE_SPEECH_VOICE", "th-TH-PremwadeeNeural"),
             tts_max_chars=int(os.getenv("TTS_MAX_CHARS", "220")),
             tts_output_format=os.getenv("TTS_OUTPUT_FORMAT", "mulaw_8khz"),
             tts_use_ssml=_truthy(os.getenv("TTS_USE_SSML"), default=True),
             tts_rate_normal=os.getenv("TTS_RATE_NORMAL", "0%"),
             tts_rate_followup=os.getenv("TTS_RATE_FOLLOWUP", "-5%"),
+            tts_rate_greeting=os.getenv("TTS_RATE_GREETING", "-5%"),
             tts_rate_red=os.getenv("TTS_RATE_RED", "-12%"),
             tts_rate_unclear=os.getenv("TTS_RATE_UNCLEAR", "-8%"),
             tts_pitch_normal=os.getenv("TTS_PITCH_NORMAL", "0%"),
+            tts_pitch_greeting=os.getenv("TTS_PITCH_GREETING", "0%"),
             tts_pitch_red=os.getenv("TTS_PITCH_RED", "-2%"),
             tts_volume=os.getenv("TTS_VOLUME", "medium"),
         )

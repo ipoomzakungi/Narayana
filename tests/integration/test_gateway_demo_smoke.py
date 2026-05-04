@@ -28,6 +28,9 @@ async def test_gateway_demo_smoke(tmp_path) -> None:
     assert health.status_code == 200
     assert health.json()["selected_provider"] == "mock"
     assert health.json()["twilio_tts_response_enabled"] is False
+    assert health.json()["twilio_initial_greeting_enabled"] is False
+    assert health.json()["twilio_initial_greeting_text_configured"] is True
+    assert health.json()["twilio_initial_greeting_profile"] == "greeting"
     assert health.json()["azure_speech_tts_configured"] is False
     assert health.json()["azure_speech_voice"] == "th-TH-PremwadeeNeural"
     assert tts.status_code == 200

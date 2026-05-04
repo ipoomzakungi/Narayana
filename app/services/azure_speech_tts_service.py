@@ -28,6 +28,10 @@ UNSAFE_SPOKEN_PATTERNS = [
     r"diagnos(e|is|ed)",
     r"วินิจฉัย",
     r"คุณเป็นโรค",
+    r"official emergency hotline",
+    r"official hotline replacement",
+    r"สายด่วนฉุกเฉินอย่างเป็นทางการ",
+    r"แทน(สายด่วน|หน่วยงานฉุกเฉิน|บริการฉุกเฉิน)",
     r"ปิดเคส",
     r"ไม่ฉุกเฉิน",
     r"ไม่ต้องขอความช่วยเหลือ",
@@ -150,6 +154,8 @@ class AzureSpeechTTSService:
     def _profile_prosody(self, profile: TTSProfile) -> tuple[str, str]:
         if profile == TTSProfile.FOLLOWUP:
             return self.settings.tts_rate_followup, self.settings.tts_pitch_normal
+        if profile == TTSProfile.GREETING:
+            return self.settings.tts_rate_greeting, self.settings.tts_pitch_greeting
         if profile == TTSProfile.RED:
             return self.settings.tts_rate_red, self.settings.tts_pitch_red
         if profile in {TTSProfile.UNCLEAR, TTSProfile.SAFE_FALLBACK}:

@@ -148,15 +148,56 @@ async def _maybe_send_tts_response(
     response_text = _payload_response_text(payload)
     if not response_text:
         return
-    if not stream_sid:
-        logger.warning("tts.failed session_id=%s call_id=%s reason=missing_twilio_streamSid", session_id, call_id)
-        return
     profile = _tts_profile_for_payload(payload)
+    mark_name = f"narayana_tts_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+
+    await _send_tts_media(
+        websocket,
+        settings=settings,
+        stream_sid=stream_sid,
+        text=response_text,
+        profile=profile,
+        call_id=call_id,
+        session_id=session_id,
+        purpose="tts",
+        mark_name=mark_name,
+    )
+
+
+async def _send_tts_media(
+    websocket: WebSocket,
+    *,
+    settings,
+    stream_sid: str | None,
+    text: str,
+    profile: TTSProfile | str,
+    call_id: str,
+    session_id: str,
+    purpose: str,
+    mark_name: str,
+) -> None:
+    if not stream_sid:
+        logger.warning("%s.failed session_id=%s call_id=%s reason=missing_twilio_streamSid", purpose, session_id, call_id)
+        return
+
+    try:
+        selected_profile = TTSProfile(profile)
+    except ValueError:
+        logger.warning(
+            "%s.failed session_id=%s call_id=%s streamSid=%s reason=invalid_tts_profile:%s",
+            purpose,
+            session_id,
+            call_id,
+            stream_sid,
+            profile,
+        )
+        selected_profile = TTSProfile.GREETING if purpose == "greeting" else TTSProfile.NORMAL
 
     service = AzureSpeechTTSService(settings)
     if not service.configured:
         logger.warning(
-            "tts.failed session_id=%s call_id=%s streamSid=%s reason=azure_speech_tts_unconfigured missing_variables=%s",
+            "%s.failed session_id=%s call_id=%s streamSid=%s reason=azure_speech_tts_unconfigured missing_variables=%s",
+            purpose,
             session_id,
             call_id,
             stream_sid,
@@ -165,22 +206,25 @@ async def _maybe_send_tts_response(
         return
 
     logger.info(
-        "tts.started session_id=%s call_id=%s streamSid=%s text_length=%s",
+        "%s.started session_id=%s call_id=%s streamSid=%s text_length=%s profile=%s",
+        purpose,
         session_id,
         call_id,
         stream_sid,
-        len(response_text),
+        len(text),
+        selected_profile.value,
     )
     try:
         result = await service.synthesize_twilio_mulaw(
-            response_text,
-            profile=profile,
+            text,
+            profile=selected_profile,
             session_id=session_id,
             call_id=call_id,
         )
     except Exception as exc:
         logger.warning(
-            "tts.failed session_id=%s call_id=%s streamSid=%s reason=%s",
+            "%s.failed session_id=%s call_id=%s streamSid=%s reason=%s",
+            purpose,
             session_id,
             call_id,
             stream_sid,
@@ -189,7 +233,8 @@ async def _maybe_send_tts_response(
         return
     if not result.configured or not result.payloads:
         logger.warning(
-            "tts.failed session_id=%s call_id=%s streamSid=%s warnings=%s",
+            "%s.failed session_id=%s call_id=%s streamSid=%s warnings=%s",
+            purpose,
             session_id,
             call_id,
             stream_sid,
@@ -197,18 +242,52 @@ async def _maybe_send_tts_response(
         )
         return
 
-    for payload_base64 in result.payloads:
-        await websocket.send_json(build_twilio_media_event(stream_sid, payload_base64))
+    try:
+        for payload_base64 in result.payloads:
+            await websocket.send_json(build_twilio_media_event(stream_sid, payload_base64))
 
-    mark_name = f"narayana_tts_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-    await websocket.send_json(build_twilio_mark_event(stream_sid, mark_name))
+        await websocket.send_json(build_twilio_mark_event(stream_sid, mark_name))
+    except Exception as exc:
+        logger.warning(
+            "%s.failed session_id=%s call_id=%s streamSid=%s reason=send_error:%s",
+            purpose,
+            session_id,
+            call_id,
+            stream_sid,
+            exc,
+        )
+        return
     logger.info(
-        "tts.completed session_id=%s call_id=%s streamSid=%s chunk_count=%s estimated_duration_ms=%s",
+        "%s.completed session_id=%s call_id=%s streamSid=%s chunk_count=%s estimated_duration_ms=%s",
+        purpose,
         session_id,
         call_id,
         stream_sid,
         result.payload_count,
         result.estimated_duration_ms,
+    )
+
+
+async def _send_initial_greeting(
+    websocket: WebSocket,
+    *,
+    settings,
+    stream_sid: str | None,
+    call_id: str,
+    session_id: str,
+) -> None:
+    if not settings.enable_twilio_initial_greeting:
+        return
+    await _send_tts_media(
+        websocket,
+        settings=settings,
+        stream_sid=stream_sid,
+        text=settings.twilio_initial_greeting_text,
+        profile=settings.twilio_initial_greeting_profile,
+        call_id=call_id,
+        session_id=session_id,
+        purpose="greeting",
+        mark_name="narayana_initial_greeting",
     )
 
 
@@ -224,6 +303,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
         VoiceInputMode.TWILIO_CALL.value,
     )
     metadata = _default_call_metadata(call_id)
+    initial_greeting_attempted = False
     processor = AudioSessionProcessor(
         settings=settings,
         session_id=session_id,
@@ -262,6 +342,15 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         "call_metadata": metadata.model_dump(mode="json"),
                     }
                 )
+                if not initial_greeting_attempted:
+                    initial_greeting_attempted = True
+                    await _send_initial_greeting(
+                        websocket,
+                        settings=settings,
+                        stream_sid=stream_sid,
+                        call_id=call_id,
+                        session_id=session_id,
+                    )
                 continue
 
             if event == "media":
