@@ -295,6 +295,12 @@ export function VoiceDebugConsole() {
                 <dt className="text-slate-500">TTS Voice</dt>
                 <dd className="font-medium">{ttsStatus?.voice ?? "-"}</dd>
               </div>
+              <div className="grid grid-cols-[110px_1fr] gap-2">
+                <dt className="text-slate-500">TTS Profile</dt>
+                <dd className="font-medium">
+                  {ttsStatus ? `${ttsStatus.profile ?? "normal"} / ${ttsStatus.ssml_enabled ? "SSML" : "text"}` : "-"}
+                </dd>
+              </div>
             </dl>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <button

@@ -40,6 +40,8 @@ async def azure_health(settings: Settings = Depends(get_settings)) -> AzureHealt
         twilio_tts_response_enabled=settings.enable_twilio_tts_response,
         azure_speech_tts_configured=settings.azure_speech_tts_configured,
         azure_speech_voice=settings.azure_speech_voice,
+        tts_use_ssml=settings.tts_use_ssml,
+        tts_output_format=settings.tts_output_format,
         missing_variables=settings.missing_azure_variables(),
         warnings=warnings,
     )

@@ -103,5 +103,7 @@ class AzureHealth(BaseModel):
     twilio_tts_response_enabled: bool = False
     azure_speech_tts_configured: bool = False
     azure_speech_voice: str = "th-TH-PremwadeeNeural"
+    tts_use_ssml: bool = True
+    tts_output_format: str = "mulaw_8khz"
     missing_variables: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

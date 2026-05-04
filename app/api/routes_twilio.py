@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.models.audio import VadState
 from app.models.telephony import CallMetadata, TelephonyCodec, TelephonyProvider, VoiceInputMode
 from app.models.triage import ProviderMode
+from app.models.tts import TTSProfile
 from app.services.audio_session_processor import AudioSessionProcessor
 from app.services.azure_speech_tts_service import AzureSpeechTTSService
 from app.services.twilio_audio_service import (
@@ -97,15 +98,36 @@ def _payload_response_text(payload: dict) -> str:
     return response_text.strip() if isinstance(response_text, str) else ""
 
 
+def _tts_profile_for_payload(payload: dict) -> TTSProfile:
+    if payload.get("type") == "intake.followup":
+        return TTSProfile.FOLLOWUP
+
+    intake = payload.get("intake") if isinstance(payload.get("intake"), dict) else {}
+    record = payload.get("record") if isinstance(payload.get("record"), dict) else {}
+    case = record.get("case") if isinstance(record.get("case"), dict) else {}
+    if payload.get("triage_level") == "RED" or case.get("triage_level") == "RED" or intake.get("action") == "escalate_human_review":
+        return TTSProfile.RED
+
+    transcript_source = str(payload.get("transcript_source") or "").lower()
+    transcript = str(payload.get("transcript") or "").lower()
+    if transcript_source == "fallback" or "unclear" in transcript_source or "เสียงไม่ชัด" in transcript:
+        return TTSProfile.UNCLEAR
+
+    return TTSProfile.NORMAL
+
+
 def _with_tts_debug_metadata(payload: dict, settings, stream_sid: str | None) -> dict:
     if not _payload_response_text(payload):
         return payload
+    profile = _tts_profile_for_payload(payload)
     updated = dict(payload)
     updated["tts"] = {
         "enabled": settings.enable_twilio_tts_response,
         "configured": settings.azure_speech_tts_configured,
         "voice": settings.azure_speech_voice,
         "audio_format": settings.tts_output_format,
+        "profile": profile.value,
+        "ssml_enabled": settings.tts_use_ssml,
         "stream_sid_present": bool(stream_sid),
     }
     return updated
@@ -129,6 +151,7 @@ async def _maybe_send_tts_response(
     if not stream_sid:
         logger.warning("tts.failed session_id=%s call_id=%s reason=missing_twilio_streamSid", session_id, call_id)
         return
+    profile = _tts_profile_for_payload(payload)
 
     service = AzureSpeechTTSService(settings)
     if not service.configured:
@@ -149,7 +172,12 @@ async def _maybe_send_tts_response(
         len(response_text),
     )
     try:
-        result = await service.synthesize_twilio_mulaw(response_text, session_id=session_id, call_id=call_id)
+        result = await service.synthesize_twilio_mulaw(
+            response_text,
+            profile=profile,
+            session_id=session_id,
+            call_id=call_id,
+        )
     except Exception as exc:
         logger.warning(
             "tts.failed session_id=%s call_id=%s streamSid=%s reason=%s",

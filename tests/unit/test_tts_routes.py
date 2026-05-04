@@ -39,10 +39,11 @@ def test_tts_test_route_uses_mocked_configured_service(monkeypatch) -> None:
         def __init__(self, settings):
             self.settings = settings
 
-        async def synthesize_twilio_mulaw(self, text: str, *, voice=None, session_id=None, call_id=None):
+        async def synthesize_twilio_mulaw(self, text: str, *, voice=None, profile="normal", session_id=None, call_id=None):
             return TTSResult(
                 configured=True,
                 voice=voice or "th-TH-PremwadeeNeural",
+                profile=profile,
                 total_bytes=160,
                 estimated_duration_ms=20,
                 sanitized_text=text,
@@ -56,12 +57,16 @@ def test_tts_test_route_uses_mocked_configured_service(monkeypatch) -> None:
     )
     client = TestClient(app)
 
-    response = client.post("/api/tts/test", json={"text": "ตอนนี้อยู่จุดไหนคะ?", "voice": "th-TH-TestVoice"})
+    response = client.post(
+        "/api/tts/test",
+        json={"text": "ตอนนี้อยู่จุดไหนคะ?", "voice": "th-TH-TestVoice", "profile": "followup"},
+    )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["configured"] is True
     assert payload["voice"] == "th-TH-TestVoice"
+    assert payload["profile"] == "followup"
     assert payload["payload_count"] == 1
     assert payload["total_bytes"] == 160
     assert "payloads" not in payload

@@ -232,10 +232,11 @@ def test_twilio_speakback_sends_json_then_media_and_mark(tmp_path, monkeypatch) 
         def missing_variables(self):
             return []
 
-        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None):
+        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None, profile="normal"):
             return TTSResult(
                 configured=True,
                 voice="th-TH-PremwadeeNeural",
+                profile=profile,
                 total_bytes=320,
                 estimated_duration_ms=40,
                 sanitized_text=text,
@@ -292,6 +293,7 @@ def test_twilio_speakback_sends_json_then_media_and_mark(tmp_path, monkeypatch) 
     assert followup_index < media_indices[0] < mark_indices[0]
     assert messages[followup_index]["tts"]["enabled"] is True
     assert messages[followup_index]["tts"]["configured"] is True
+    assert messages[followup_index]["tts"]["profile"] == "followup"
     assert messages[followup_index]["tts"]["stream_sid_present"] is True
     assert messages[media_indices[0]] == {"event": "media", "streamSid": "MZ123", "media": {"payload": "abcd"}}
     assert messages[mark_indices[0]]["streamSid"] == "MZ123"

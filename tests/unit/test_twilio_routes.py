@@ -103,7 +103,7 @@ async def test_twilio_tts_failure_does_not_raise_or_send_audio(monkeypatch) -> N
         def missing_variables(self):
             return []
 
-        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None):
+        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None, profile="normal"):
             raise RuntimeError("tts unavailable")
 
     monkeypatch.setattr(routes_twilio, "AzureSpeechTTSService", FailingTTSService)
@@ -139,5 +139,25 @@ def test_twilio_tts_debug_metadata_is_additive() -> None:
         "configured": True,
         "voice": "th-TH-PremwadeeNeural",
         "audio_format": "mulaw_8khz",
+        "profile": "followup",
+        "ssml_enabled": True,
         "stream_sid_present": True,
     }
+
+
+def test_twilio_tts_profile_detects_red_and_unclear_payloads() -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    red_payload = {
+        "type": "triage.case.created",
+        "record": {"case": {"triage_level": "RED"}},
+        "response_text": "รับทราบค่ะ",
+    }
+    unclear_payload = {
+        "type": "triage.case.created",
+        "transcript_source": "fallback",
+        "response_text": "เสียงไม่ชัด",
+    }
+
+    assert routes_twilio._tts_profile_for_payload(red_payload) == "red"
+    assert routes_twilio._tts_profile_for_payload(unclear_payload) == "unclear"

@@ -63,6 +63,14 @@ class Settings:
     azure_speech_voice: str = "th-TH-PremwadeeNeural"
     tts_max_chars: int = 220
     tts_output_format: str = "mulaw_8khz"
+    tts_use_ssml: bool = True
+    tts_rate_normal: str = "0%"
+    tts_rate_followup: str = "-5%"
+    tts_rate_red: str = "-12%"
+    tts_rate_unclear: str = "-8%"
+    tts_pitch_normal: str = "0%"
+    tts_pitch_red: str = "-2%"
+    tts_volume: str = "medium"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -106,6 +114,14 @@ class Settings:
             azure_speech_voice=os.getenv("AZURE_SPEECH_VOICE", "th-TH-PremwadeeNeural"),
             tts_max_chars=int(os.getenv("TTS_MAX_CHARS", "220")),
             tts_output_format=os.getenv("TTS_OUTPUT_FORMAT", "mulaw_8khz"),
+            tts_use_ssml=_truthy(os.getenv("TTS_USE_SSML"), default=True),
+            tts_rate_normal=os.getenv("TTS_RATE_NORMAL", "0%"),
+            tts_rate_followup=os.getenv("TTS_RATE_FOLLOWUP", "-5%"),
+            tts_rate_red=os.getenv("TTS_RATE_RED", "-12%"),
+            tts_rate_unclear=os.getenv("TTS_RATE_UNCLEAR", "-8%"),
+            tts_pitch_normal=os.getenv("TTS_PITCH_NORMAL", "0%"),
+            tts_pitch_red=os.getenv("TTS_PITCH_RED", "-2%"),
+            tts_volume=os.getenv("TTS_VOLUME", "medium"),
         )
 
     @property

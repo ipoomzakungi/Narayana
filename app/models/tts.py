@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
+
+
+class TTSProfile(StrEnum):
+    NORMAL = "normal"
+    FOLLOWUP = "followup"
+    RED = "red"
+    UNCLEAR = "unclear"
+    SAFE_FALLBACK = "safe_fallback"
 
 
 class TTSRequest(BaseModel):
     text: str = Field(min_length=1)
     language: str = "th"
     voice: str | None = None
+    profile: TTSProfile = TTSProfile.NORMAL
 
     @field_validator("text")
     @classmethod
@@ -21,6 +32,8 @@ class TTSResult(BaseModel):
     configured: bool
     voice: str
     audio_format: str = "mulaw_8khz"
+    profile: TTSProfile = TTSProfile.NORMAL
+    ssml_enabled: bool = True
     payload_count: int = 0
     total_bytes: int = 0
     estimated_duration_ms: int = 0
@@ -43,6 +56,8 @@ class TTSTestResponse(BaseModel):
     configured: bool
     voice: str
     audio_format: str = "mulaw_8khz"
+    profile: TTSProfile = TTSProfile.NORMAL
+    ssml_enabled: bool = True
     payload_count: int = 0
     total_bytes: int = 0
     estimated_duration_ms: int = 0

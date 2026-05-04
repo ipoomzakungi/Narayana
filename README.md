@@ -147,6 +147,14 @@ ENABLE_TWILIO_TTS_RESPONSE=false
 AZURE_SPEECH_VOICE=th-TH-PremwadeeNeural
 TTS_MAX_CHARS=220
 TTS_OUTPUT_FORMAT=mulaw_8khz
+TTS_USE_SSML=true
+TTS_RATE_NORMAL=0%
+TTS_RATE_FOLLOWUP=-5%
+TTS_RATE_RED=-12%
+TTS_RATE_UNCLEAR=-8%
+TTS_PITCH_NORMAL=0%
+TTS_PITCH_RED=-2%
+TTS_VOLUME=medium
 ```
 
 To enable a real-call test, configure Azure Speech and turn on both multi-turn intake and speak-back:
@@ -167,7 +175,7 @@ Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/tts/test" `
   -ContentType "application/json" `
-  -Body '{"text":"ตอนนี้อยู่จุดไหนหรือใกล้สถานที่สำคัญอะไรคะ?"}'
+  -Body '{"text":"ตอนนี้อยู่จุดไหนหรือใกล้สถานที่สำคัญอะไรคะ?","profile":"followup"}'
 ```
 
 Expected when configured:
@@ -175,6 +183,7 @@ Expected when configured:
 - `configured=true`
 - `voice=th-TH-PremwadeeNeural`
 - `audio_format=mulaw_8khz`
+- `profile=followup`
 - `payload_count` greater than zero
 - no raw audio payload field
 
@@ -183,8 +192,12 @@ Health includes:
 - `twilio_tts_response_enabled`
 - `azure_speech_tts_configured`
 - `azure_speech_voice`
+- `tts_use_ssml`
+- `tts_output_format`
 
 During a Twilio call, the backend still sends the normal JSON debug or case payload first. If speak-back is enabled, configured, and the payload has safe `response_text`, the backend sends Twilio `media` chunks followed by a Twilio `mark` event. Logs include `tts.started`, `tts.completed`, or `tts.failed`, chunk count, stream ID, and duration estimate. Logs must not include secrets or raw audio payloads.
+
+SSML is enabled by default for Azure Speech TTS. Narayana uses only `prosody` rate, pitch, and volume controls rather than style names, so the voice remains compatible with Thai neural voices. Profiles are selected from the Twilio payload: follow-up questions use `followup`, RED or human-escalation responses use `red`, unclear/fallback transcript responses use `unclear`, and sanitized unsafe text uses `safe_fallback`.
 
 Spoken text is sanitized before synthesis. Narayana must not say rescue was dispatched, an ambulance is on the way, give a diagnosis, close/reject an emergency, or provide long unsafe guidance. If synthesis fails, the call continues and case creation or follow-up output is not blocked.
 

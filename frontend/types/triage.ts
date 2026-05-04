@@ -149,6 +149,8 @@ export interface TTSDebugStatus {
   configured: boolean;
   voice: string;
   audio_format: "mulaw_8khz" | string;
+  profile?: "normal" | "followup" | "red" | "unclear" | "safe_fallback" | string;
+  ssml_enabled?: boolean;
   stream_sid_present?: boolean;
   warnings?: string[];
 }

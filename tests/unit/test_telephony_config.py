@@ -18,6 +18,14 @@ def test_telephony_defaults_keep_local_mic_and_no_provider() -> None:
     assert settings.azure_speech_voice == "th-TH-PremwadeeNeural"
     assert settings.tts_max_chars == 220
     assert settings.tts_output_format == "mulaw_8khz"
+    assert settings.tts_use_ssml is True
+    assert settings.tts_rate_normal == "0%"
+    assert settings.tts_rate_followup == "-5%"
+    assert settings.tts_rate_red == "-12%"
+    assert settings.tts_rate_unclear == "-8%"
+    assert settings.tts_pitch_normal == "0%"
+    assert settings.tts_pitch_red == "-2%"
+    assert settings.tts_volume == "medium"
     assert settings.twilio_configured is False
     assert settings.acs_configured is False
     assert settings.azure_speech_tts_configured is False
@@ -53,6 +61,10 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     monkeypatch.setenv("AZURE_SPEECH_VOICE", "th-TH-TestVoice")
     monkeypatch.setenv("TTS_MAX_CHARS", "120")
     monkeypatch.setenv("TTS_OUTPUT_FORMAT", "mulaw_8khz")
+    monkeypatch.setenv("TTS_USE_SSML", "false")
+    monkeypatch.setenv("TTS_RATE_FOLLOWUP", "-9%")
+    monkeypatch.setenv("TTS_RATE_RED", "-15%")
+    monkeypatch.setenv("TTS_VOLUME", "soft")
     reset_settings_cache()
 
     settings = Settings.from_env()
@@ -61,6 +73,10 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     assert settings.azure_speech_voice == "th-TH-TestVoice"
     assert settings.tts_max_chars == 120
     assert settings.tts_output_format == "mulaw_8khz"
+    assert settings.tts_use_ssml is False
+    assert settings.tts_rate_followup == "-9%"
+    assert settings.tts_rate_red == "-15%"
+    assert settings.tts_volume == "soft"
     assert settings.azure_speech_tts_configured is False
     assert settings.missing_azure_speech_tts_variables() == ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"]
     reset_settings_cache()
