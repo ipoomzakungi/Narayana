@@ -4,7 +4,7 @@ import pytest
 
 from app.core.config import Settings
 from app.models.intake import ConversationSpeaker, ConversationTurn, IntakeAction, IntakeSessionState
-from app.services.azure_openai_intake_provider import AzureOpenAIIntakeProvider
+from app.services.azure_openai_intake_provider import AzureOpenAIIntakeProvider, build_intake_system_prompt
 from app.services.intake_guardrails import evaluate_intake_guardrails
 
 
@@ -41,3 +41,16 @@ async def test_provider_fallback_creates_red_decision_for_high_risk_sample() -> 
     assert decision.case_group == "rescue"
     assert decision.human_review_required is True
     assert "ขอให้เจ้าหน้าที่ตรวจสอบทันที" in decision.response_text
+
+
+def test_build_intake_system_prompt_contains_scope_and_safety_rules() -> None:
+    prompt = build_intake_system_prompt(Settings(assistant_display_name="ระบบช่วยรับแจ้งเหตุ"))
+
+    assert "ระบบช่วยรับแจ้งเหตุ" in prompt
+    assert "crisis_intake_only" in prompt
+    assert "Do not chit-chat" in prompt
+    assert "coding" in prompt
+    assert "Never say rescue has been dispatched" in prompt
+    assert "Do not diagnose" in prompt
+    assert "Ask only one question" in prompt
+    assert "JSON only" in prompt

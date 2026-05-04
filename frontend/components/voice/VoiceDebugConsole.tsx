@@ -11,6 +11,7 @@ import type {
   CallMetadata,
   CaseRepositoryRecord,
   IntakeResponse,
+  ScopeDebugFields,
   SourceInputMode,
   TTSDebugStatus,
   TranscriptSource,
@@ -50,6 +51,7 @@ export function VoiceDebugConsole() {
   const [sourceInputMode, setSourceInputMode] = useState<SourceInputMode | null>(null);
   const [callMetadata, setCallMetadata] = useState<CallMetadata | null>(null);
   const [ttsStatus, setTtsStatus] = useState<TTSDebugStatus | null>(null);
+  const [scopeDebug, setScopeDebug] = useState<ScopeDebugFields | null>(null);
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +73,7 @@ export function VoiceDebugConsole() {
       setSourceInputMode(null);
       setCallMetadata(null);
       setTtsStatus(null);
+      setScopeDebug(null);
       setIntakeResponse(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create case");
@@ -97,6 +100,16 @@ export function VoiceDebugConsole() {
       setSourceInputMode(null);
       setCallMetadata(null);
       setTtsStatus(null);
+      setScopeDebug({
+        off_topic_count: response.off_topic_count,
+        redirect_count: response.redirect_count,
+        no_reply_prompt_count: response.no_reply_prompt_count,
+        call_end_recommended: response.call_end_recommended,
+        call_end_reason: response.call_end_reason,
+        last_assistant_redirect: response.last_assistant_redirect,
+        guardrail_warnings: response.guardrail_warnings,
+        response_text: response.response_text
+      });
       if (response.created_case) {
         setCaseRecord(response.created_case);
         setTriage(response.created_case.case);
@@ -115,6 +128,7 @@ export function VoiceDebugConsole() {
       setSourceInputMode(message.source_input_mode ?? null);
       setCallMetadata(message.call_metadata ?? null);
       setTtsStatus(null);
+      setScopeDebug(null);
       return;
     }
     if (message.type === "debug.event") {
@@ -143,6 +157,16 @@ export function VoiceDebugConsole() {
       setAudioRef(message.audio_ref ?? null);
       setProviderWarnings([...(message.warnings ?? []), ...message.guardrail_warnings]);
       setTtsStatus(message.tts ?? null);
+      setScopeDebug({
+        off_topic_count: message.off_topic_count ?? message.partial_state.off_topic_count,
+        redirect_count: message.redirect_count ?? message.partial_state.redirect_count,
+        no_reply_prompt_count: message.no_reply_prompt_count ?? message.partial_state.no_reply_prompt_count,
+        call_end_recommended: message.call_end_recommended ?? message.partial_state.call_end_recommended,
+        call_end_reason: message.call_end_reason ?? message.partial_state.call_end_reason,
+        last_assistant_redirect: message.last_assistant_redirect ?? message.partial_state.last_assistant_redirect,
+        guardrail_warnings: message.guardrail_warnings,
+        response_text: message.response_text
+      });
       setSourceInputMode(message.source_input_mode ?? null);
       setCallMetadata(message.call_metadata ?? null);
       setVadState("listening");
@@ -175,7 +199,32 @@ export function VoiceDebugConsole() {
           created_case: message.record
         });
       }
+      setScopeDebug({
+        off_topic_count: message.off_topic_count ?? message.intake?.partial_state.off_topic_count,
+        redirect_count: message.redirect_count ?? message.intake?.partial_state.redirect_count,
+        no_reply_prompt_count: message.no_reply_prompt_count ?? message.intake?.partial_state.no_reply_prompt_count,
+        call_end_recommended: message.call_end_recommended ?? message.intake?.partial_state.call_end_recommended,
+        call_end_reason: message.call_end_reason ?? message.intake?.partial_state.call_end_reason,
+        last_assistant_redirect: message.last_assistant_redirect ?? message.intake?.partial_state.last_assistant_redirect,
+        guardrail_warnings: message.intake?.guardrail_warnings,
+        response_text: message.response_text ?? undefined
+      });
       setVadState("listening");
+      return;
+    }
+    if (message.type === "call.no_reply_prompt" || message.type === "call.ending") {
+      setScopeDebug({
+        off_topic_count: message.off_topic_count,
+        redirect_count: message.redirect_count,
+        no_reply_prompt_count: message.no_reply_prompt_count,
+        call_end_recommended: message.call_end_recommended,
+        call_end_reason: message.call_end_reason,
+        last_assistant_redirect: message.last_assistant_redirect,
+        guardrail_warnings: message.guardrail_warnings,
+        response_text: message.response_text
+      });
+      setProviderWarnings(message.guardrail_warnings ?? []);
+      setVadState(message.type === "call.ending" ? "silence" : "listening");
       return;
     }
     if (message.type === "error") {
@@ -191,6 +240,7 @@ export function VoiceDebugConsole() {
     setSourceInputMode(null);
     setCallMetadata(null);
     setTtsStatus(null);
+    setScopeDebug(null);
     setIntakeResponse(null);
     const sessionId = `session_${Date.now()}`;
     const client = createVoiceWsClient({
@@ -464,6 +514,34 @@ export function VoiceDebugConsole() {
               <div className="col-span-2">
                 <dt className="text-slate-500">Guardrails</dt>
                 <dd className="font-medium">{intakeResponse?.guardrail_warnings.join(", ") || "-"}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Off Topic</dt>
+                <dd className="font-medium">{scopeDebug?.off_topic_count ?? intakeResponse?.partial_state.off_topic_count ?? 0}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Redirects</dt>
+                <dd className="font-medium">{scopeDebug?.redirect_count ?? intakeResponse?.partial_state.redirect_count ?? 0}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">No Reply</dt>
+                <dd className="font-medium">{scopeDebug?.no_reply_prompt_count ?? intakeResponse?.partial_state.no_reply_prompt_count ?? 0}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">End Call</dt>
+                <dd className="font-medium">
+                  {(scopeDebug?.call_end_recommended ?? intakeResponse?.partial_state.call_end_recommended) ? "recommended" : "no"}
+                </dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-slate-500">Close Reason</dt>
+                <dd className="font-medium">{scopeDebug?.call_end_reason ?? intakeResponse?.partial_state.call_end_reason ?? "-"}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-slate-500">Last Redirect</dt>
+                <dd className="font-medium">
+                  {scopeDebug?.last_assistant_redirect ?? intakeResponse?.partial_state.last_assistant_redirect ?? "-"}
+                </dd>
               </div>
             </dl>
             <div className="mt-4 border-t border-command-line pt-4">

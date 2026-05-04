@@ -17,6 +17,12 @@ def test_tts_request_accepts_greeting_profile() -> None:
     assert request.profile == TTSProfile.GREETING
 
 
+def test_tts_request_accepts_closing_profile() -> None:
+    request = TTSRequest(text="หากไม่มีการตอบกลับ ระบบจะสิ้นสุดสายนี้นะคะ", profile="closing")
+
+    assert request.profile == TTSProfile.CLOSING
+
+
 def test_tts_result_keeps_payloads_out_of_public_dump() -> None:
     result = TTSResult(configured=True, voice="th-TH-PremwadeeNeural").with_payloads(["abcd"])
 

@@ -14,10 +14,22 @@ def test_telephony_defaults_keep_local_mic_and_no_provider() -> None:
     assert settings.assistant_language == "th"
     assert settings.assistant_max_followups == 3
     assert settings.assistant_name == "Narayana"
+    assert settings.assistant_display_name == "ระบบช่วยรับแจ้งเหตุ"
+    assert settings.assistant_system_prompt_version == "v1"
+    assert settings.assistant_scope == "crisis_intake_only"
+    assert "emergency" in settings.assistant_allowed_topics
+    assert settings.assistant_decline_off_topic is True
+    assert settings.call_no_reply_seconds == 10
+    assert settings.call_no_reply_prompt_seconds == 15
+    assert settings.call_max_no_reply_prompts == 2
+    assert settings.call_max_off_topic_redirects == 2
+    assert settings.call_end_on_repeated_off_topic is True
+    assert settings.call_end_on_no_reply is True
+    assert settings.twilio_force_hangup_enabled is False
     assert settings.enable_twilio_tts_response is False
     assert settings.enable_twilio_initial_greeting is False
     assert settings.twilio_initial_greeting_text == (
-        "สวัสดีค่ะ นารายานาพร้อมรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ"
+        "สวัสดีค่ะ นี่คือระบบช่วยรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ"
     )
     assert settings.twilio_initial_greeting_profile == "greeting"
     assert settings.twilio_initial_greeting_fallback_say is False
@@ -30,9 +42,11 @@ def test_telephony_defaults_keep_local_mic_and_no_provider() -> None:
     assert settings.tts_rate_greeting == "-5%"
     assert settings.tts_rate_red == "-12%"
     assert settings.tts_rate_unclear == "-8%"
+    assert settings.tts_rate_closing == "-8%"
     assert settings.tts_pitch_normal == "0%"
     assert settings.tts_pitch_greeting == "0%"
     assert settings.tts_pitch_red == "-2%"
+    assert settings.tts_pitch_closing == "0%"
     assert settings.tts_volume == "medium"
     assert settings.twilio_configured is False
     assert settings.acs_configured is False
@@ -77,8 +91,21 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     monkeypatch.setenv("TTS_RATE_FOLLOWUP", "-9%")
     monkeypatch.setenv("TTS_RATE_GREETING", "-6%")
     monkeypatch.setenv("TTS_RATE_RED", "-15%")
+    monkeypatch.setenv("TTS_RATE_CLOSING", "-10%")
     monkeypatch.setenv("TTS_PITCH_GREETING", "-1%")
+    monkeypatch.setenv("TTS_PITCH_CLOSING", "-2%")
     monkeypatch.setenv("TTS_VOLUME", "soft")
+    monkeypatch.setenv("ASSISTANT_DISPLAY_NAME", "ศูนย์รับแจ้งเหตุ")
+    monkeypatch.setenv("ASSISTANT_SYSTEM_PROMPT_VERSION", "v2")
+    monkeypatch.setenv("ASSISTANT_ALLOWED_TOPICS", "emergency,fire")
+    monkeypatch.setenv("ASSISTANT_DECLINE_OFF_TOPIC", "false")
+    monkeypatch.setenv("CALL_NO_REPLY_SECONDS", "4")
+    monkeypatch.setenv("CALL_NO_REPLY_PROMPT_SECONDS", "8")
+    monkeypatch.setenv("CALL_MAX_NO_REPLY_PROMPTS", "1")
+    monkeypatch.setenv("CALL_MAX_OFF_TOPIC_REDIRECTS", "1")
+    monkeypatch.setenv("CALL_END_ON_REPEATED_OFF_TOPIC", "false")
+    monkeypatch.setenv("CALL_END_ON_NO_REPLY", "false")
+    monkeypatch.setenv("TWILIO_FORCE_HANGUP_ENABLED", "true")
     reset_settings_cache()
 
     settings = Settings.from_env()
@@ -95,8 +122,21 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     assert settings.tts_rate_followup == "-9%"
     assert settings.tts_rate_greeting == "-6%"
     assert settings.tts_rate_red == "-15%"
+    assert settings.tts_rate_closing == "-10%"
     assert settings.tts_pitch_greeting == "-1%"
+    assert settings.tts_pitch_closing == "-2%"
     assert settings.tts_volume == "soft"
+    assert settings.assistant_display_name == "ศูนย์รับแจ้งเหตุ"
+    assert settings.assistant_system_prompt_version == "v2"
+    assert settings.assistant_allowed_topics == ("emergency", "fire")
+    assert settings.assistant_decline_off_topic is False
+    assert settings.call_no_reply_seconds == 4
+    assert settings.call_no_reply_prompt_seconds == 8
+    assert settings.call_max_no_reply_prompts == 1
+    assert settings.call_max_off_topic_redirects == 1
+    assert settings.call_end_on_repeated_off_topic is False
+    assert settings.call_end_on_no_reply is False
+    assert settings.twilio_force_hangup_enabled is True
     assert settings.azure_speech_tts_configured is False
     assert settings.missing_azure_speech_tts_variables() == ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"]
     reset_settings_cache()

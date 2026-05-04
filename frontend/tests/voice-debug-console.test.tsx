@@ -298,6 +298,12 @@ describe("VoiceDebugConsole", () => {
           status: "waiting_for_followup",
           guardrail_warnings: ["human_review:elderly_vulnerable"],
           decision_audit: [],
+          off_topic_count: 1,
+          redirect_count: 1,
+          no_reply_prompt_count: 0,
+          call_end_recommended: false,
+          call_end_reason: "",
+          last_assistant_redirect: "ขออภัยค่ะ ระบบนี้ใช้สำหรับรับแจ้งเหตุหรือขอความช่วยเหลือเท่านั้น หากต้องการแจ้งเหตุ กรุณาบอกสถานการณ์และสถานที่ค่ะ",
           created_at: "2026-05-02T00:00:00Z",
           updated_at: "2026-05-02T00:00:01Z"
         },
@@ -308,6 +314,12 @@ describe("VoiceDebugConsole", () => {
         missing_fields: ["injuries"],
         reason: "Critical intake fields are still missing.",
         guardrail_warnings: ["human_review:elderly_vulnerable"],
+        off_topic_count: 1,
+        redirect_count: 1,
+        no_reply_prompt_count: 0,
+        call_end_recommended: false,
+        call_end_reason: "",
+        last_assistant_redirect: "ขออภัยค่ะ ระบบนี้ใช้สำหรับรับแจ้งเหตุหรือขอความช่วยเหลือเท่านั้น หากต้องการแจ้งเหตุ กรุณาบอกสถานการณ์และสถานที่ค่ะ",
         source_input_mode: "twilio_call",
         tts: {
           enabled: true,
@@ -327,5 +339,37 @@ describe("VoiceDebugConsole", () => {
     expect(screen.getByText("enabled / configured")).toBeInTheDocument();
     expect(screen.getByText("th-TH-PremwadeeNeural")).toBeInTheDocument();
     expect(screen.getByText("tts sanitized")).toBeInTheDocument();
+    expect(screen.getByText("Off Topic")).toBeInTheDocument();
+    expect(screen.getByText("Redirects")).toBeInTheDocument();
+    expect(screen.getByText("No Reply")).toBeInTheDocument();
+    expect(screen.getByText("End Call")).toBeInTheDocument();
+    expect(screen.getAllByText("1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("no").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/ระบบนี้ใช้สำหรับรับแจ้งเหตุ/).length).toBeGreaterThan(0);
+  });
+
+  it("renders no-reply and call ending debug payloads", async () => {
+    render(<VoiceDebugConsole />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(mocks.createVoiceWsClient).toHaveBeenCalled());
+
+    act(() => {
+      mocks.lastWsOptions?.onMessage({
+        type: "call.ending",
+        session_id: "twilio_CA123",
+        response_text: "หากไม่มีการตอบกลับ ระบบจะสิ้นสุดสายนี้นะคะ",
+        no_reply_prompt_count: 2,
+        call_end_recommended: true,
+        call_end_reason: "no_reply",
+        guardrail_warnings: ["call:end_recommended:no_reply"],
+        last_assistant_redirect: "หากไม่มีการตอบกลับ ระบบจะสิ้นสุดสายนี้นะคะ"
+      });
+    });
+
+    expect(screen.getByText("หากไม่มีการตอบกลับ ระบบจะสิ้นสุดสายนี้นะคะ")).toBeInTheDocument();
+    expect(screen.getByText("recommended")).toBeInTheDocument();
+    expect(screen.getByText("no_reply")).toBeInTheDocument();
+    expect(screen.getByText("call:end_recommended:no_reply")).toBeInTheDocument();
   });
 });

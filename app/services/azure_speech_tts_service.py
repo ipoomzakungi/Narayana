@@ -158,6 +158,8 @@ class AzureSpeechTTSService:
             return self.settings.tts_rate_greeting, self.settings.tts_pitch_greeting
         if profile == TTSProfile.RED:
             return self.settings.tts_rate_red, self.settings.tts_pitch_red
+        if profile == TTSProfile.CLOSING:
+            return self.settings.tts_rate_closing, self.settings.tts_pitch_closing
         if profile in {TTSProfile.UNCLEAR, TTSProfile.SAFE_FALLBACK}:
             return self.settings.tts_rate_unclear, self.settings.tts_pitch_normal
         return self.settings.tts_rate_normal, self.settings.tts_pitch_normal

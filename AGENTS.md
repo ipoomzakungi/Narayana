@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
 For Narayana AI implementation context, read the current plan:
 
-- `specs/007-twilio-initial-greeting/plan.md`
+- `specs/008-crisis-scope-guardrails/plan.md`
 <!-- SPECKIT END -->

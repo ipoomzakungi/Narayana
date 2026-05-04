@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime
 
 from app.models.intake import (
     ConversationSpeaker,
@@ -44,7 +45,9 @@ class IntakeSessionStore:
         return state
 
     def append_caller_turn(self, session_id: str, text: str) -> ConversationTurn:
-        return self._append_turn(session_id, ConversationSpeaker.CALLER, text)
+        turn = self._append_turn(session_id, ConversationSpeaker.CALLER, text)
+        self._sessions[session_id].last_caller_speech_at = turn.created_at
+        return turn
 
     def append_assistant_turn(self, session_id: str, text: str) -> ConversationTurn:
         return self._append_turn(session_id, ConversationSpeaker.ASSISTANT, text)
@@ -74,6 +77,49 @@ class IntakeSessionStore:
 
     def save(self, state: IntakeSessionState) -> IntakeSessionState:
         self._sessions[state.session_id] = state
+        state.touch()
+        return state
+
+    def mark_greeting_sent(self, session_id: str, when: datetime | None = None) -> IntakeSessionState:
+        from app.models.intake import utc_now
+
+        state = self._sessions[session_id]
+        state.greeting_sent_at = when or utc_now()
+        state.touch()
+        return state
+
+    def record_no_reply_prompt(self, session_id: str, text: str) -> IntakeSessionState:
+        state = self._sessions[session_id]
+        state.no_reply_prompt_count += 1
+        state.last_assistant_redirect = text
+        state.guardrail_warnings = _merge_unique(state.guardrail_warnings, ["call:no_reply_prompt"])
+        self.append_assistant_turn(session_id, text)
+        state.decision_audit.append(
+            {
+                "action": "no_reply_prompt",
+                "response_text": text,
+                "no_reply_prompt_count": state.no_reply_prompt_count,
+                "guardrail_warnings": ["call:no_reply_prompt"],
+            }
+        )
+        state.touch()
+        return state
+
+    def mark_call_end_recommended(self, session_id: str, reason: str, response_text: str) -> IntakeSessionState:
+        state = self._sessions[session_id]
+        state.call_end_recommended = True
+        state.call_end_reason = reason
+        state.last_assistant_redirect = response_text
+        state.guardrail_warnings = _merge_unique(state.guardrail_warnings, [f"call:end_recommended:{reason}"])
+        self.append_assistant_turn(session_id, response_text)
+        state.decision_audit.append(
+            {
+                "action": "call_end_recommended",
+                "reason": reason,
+                "response_text": response_text,
+                "guardrail_warnings": [f"call:end_recommended:{reason}"],
+            }
+        )
         state.touch()
         return state
 

@@ -157,6 +157,15 @@ def test_greeting_profile_uses_configured_rate_and_pitch() -> None:
     assert 'pitch="-1%"' in ssml
 
 
+def test_closing_profile_uses_configured_rate_and_pitch() -> None:
+    service = AzureSpeechTTSService(Settings(tts_rate_closing="-9%", tts_pitch_closing="-1%"))
+
+    ssml = service.build_ssml("หากไม่มีการตอบกลับ ระบบจะสิ้นสุดสายนี้นะคะ", "th-TH-PremwadeeNeural", TTSProfile.CLOSING)
+
+    assert 'rate="-9%"' in ssml
+    assert 'pitch="-1%"' in ssml
+
+
 @pytest.mark.asyncio
 async def test_unsafe_dispatch_phrase_is_replaced_before_ssml() -> None:
     captured: dict[str, str] = {}

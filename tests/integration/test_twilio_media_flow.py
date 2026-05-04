@@ -441,3 +441,126 @@ def test_twilio_speakback_sends_json_then_media_and_mark(tmp_path, monkeypatch) 
     assert messages[media_indices[0]] == {"event": "media", "streamSid": "MZ123", "media": {"payload": "abcd"}}
     assert messages[mark_indices[0]]["streamSid"] == "MZ123"
     assert messages[mark_indices[0]]["mark"]["name"].startswith("narayana_tts_")
+
+
+def test_twilio_no_reply_prompt_then_closes_with_mocked_tts(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    class MockTTSService:
+        configured = True
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        def missing_variables(self):
+            return []
+
+        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None, profile="normal"):
+            return TTSResult(
+                configured=True,
+                voice="th-TH-PremwadeeNeural",
+                profile=profile,
+                total_bytes=160,
+                estimated_duration_ms=20,
+                sanitized_text=text,
+            ).with_payloads(["abcd"])
+
+    monkeypatch.setattr(
+        routes_twilio,
+        "get_settings",
+        lambda: Settings(
+            use_mock_services=True,
+            enable_twilio_tts_response=True,
+            azure_speech_key="key",
+            azure_speech_region="eastus",
+            call_no_reply_seconds=0.01,
+            call_no_reply_prompt_seconds=0.01,
+            call_max_no_reply_prompts=1,
+        ),
+    )
+    monkeypatch.setattr(routes_twilio, "AzureSpeechTTSService", MockTTSService)
+    client = TestClient(create_app())
+
+    with client.websocket_connect("/ws/telephony/twilio/CA_NO_REPLY") as websocket:
+        websocket.send_json(
+            {
+                "event": "start",
+                "sequenceNumber": "1",
+                "start": {
+                    "callSid": "CA_NO_REPLY",
+                    "streamSid": "MZ_NO_REPLY",
+                    "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
+                },
+            }
+        )
+        messages = []
+        for _ in range(20):
+            message = websocket.receive_json()
+            messages.append(message)
+            if message.get("type") == "call.ending":
+                break
+
+    prompt = next(message for message in messages if message.get("type") == "call.no_reply_prompt")
+    ending = next(message for message in messages if message.get("type") == "call.ending")
+    assert prompt["response_text"].startswith("ยังอยู่ในสายไหมคะ")
+    assert prompt["no_reply_prompt_count"] == 1
+    assert ending["call_end_recommended"] is True
+    assert ending["call_end_reason"] == "no_reply"
+    assert "ระบบจะสิ้นสุดสายนี้" in ending["response_text"]
+    assert any(message.get("event") == "media" for message in messages)
+    assert any(message.get("event") == "mark" for message in messages)
+
+
+def test_twilio_no_reply_tts_failure_still_closes(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    class FailingTTSService:
+        configured = True
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        def missing_variables(self):
+            return []
+
+        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None, profile="normal"):
+            raise RuntimeError("tts unavailable")
+
+    monkeypatch.setattr(
+        routes_twilio,
+        "get_settings",
+        lambda: Settings(
+            use_mock_services=True,
+            enable_twilio_tts_response=True,
+            azure_speech_key="key",
+            azure_speech_region="eastus",
+            call_no_reply_seconds=0.01,
+            call_no_reply_prompt_seconds=0.01,
+            call_max_no_reply_prompts=1,
+        ),
+    )
+    monkeypatch.setattr(routes_twilio, "AzureSpeechTTSService", FailingTTSService)
+    client = TestClient(create_app())
+
+    with client.websocket_connect("/ws/telephony/twilio/CA_NO_REPLY_FAIL") as websocket:
+        websocket.send_json(
+            {
+                "event": "start",
+                "sequenceNumber": "1",
+                "start": {
+                    "callSid": "CA_NO_REPLY_FAIL",
+                    "streamSid": "MZ_NO_REPLY_FAIL",
+                    "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
+                },
+            }
+        )
+        messages = []
+        for _ in range(10):
+            message = websocket.receive_json()
+            messages.append(message)
+            if message.get("type") == "call.ending":
+                break
+
+    assert any(message.get("type") == "call.no_reply_prompt" for message in messages)
+    assert any(message.get("type") == "call.ending" for message in messages)
+    assert not any(message.get("event") == "media" for message in messages)

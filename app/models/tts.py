@@ -11,6 +11,7 @@ class TTSProfile(StrEnum):
     GREETING = "greeting"
     RED = "red"
     UNCLEAR = "unclear"
+    CLOSING = "closing"
     SAFE_FALLBACK = "safe_fallback"
 
 

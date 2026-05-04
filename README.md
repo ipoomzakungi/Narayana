@@ -129,12 +129,71 @@ ASSISTANT_TONE=calm_concise
 ASSISTANT_MAX_FOLLOWUPS=3
 ASSISTANT_QUESTION_STYLE=single_short_question
 ASSISTANT_NAME=Narayana
+ASSISTANT_DISPLAY_NAME=ระบบช่วยรับแจ้งเหตุ
+ASSISTANT_SYSTEM_PROMPT_VERSION=v1
+ASSISTANT_SCOPE=crisis_intake_only
+ASSISTANT_ALLOWED_TOPICS=emergency,medical,flood,fire,accident,public_safety,tourist_support,mental_health_crisis,utility_infrastructure,shelter_supplies
+ASSISTANT_DECLINE_OFF_TOPIC=true
 ASSISTANT_RESPONSE_MAX_CHARS=180
 ```
 
 When `ENABLE_MULTI_TURN_INTAKE=true`, committed phone/local audio transcripts are routed through the intake orchestrator. `ask_followup` emits an `intake.followup` WebSocket payload with `response_text`; `create_case` and `escalate_human_review` continue to emit `triage.case.created` with additive intake metadata.
 
 Spoken Twilio playback is a separate optional feature. It stays disabled unless `ENABLE_TWILIO_TTS_RESPONSE=true`.
+
+## Crisis Scope Guardrails and No-Reply Handling
+
+Narayana is a crisis intake assistant, not a general chatbot. The intake layer now applies deterministic scope guardrails before model decisions so mock mode and automated tests behave the same way as Azure-backed demos.
+
+Default identity and scope settings:
+
+```dotenv
+ASSISTANT_DISPLAY_NAME=ระบบช่วยรับแจ้งเหตุ
+ASSISTANT_SYSTEM_PROMPT_VERSION=v1
+ASSISTANT_SCOPE=crisis_intake_only
+ASSISTANT_ALLOWED_TOPICS=emergency,medical,flood,fire,accident,public_safety,tourist_support,mental_health_crisis,utility_infrastructure,shelter_supplies
+ASSISTANT_DECLINE_OFF_TOPIC=true
+CALL_MAX_OFF_TOPIC_REDIRECTS=2
+CALL_END_ON_REPEATED_OFF_TOPIC=true
+```
+
+First off-topic turns receive:
+
+```text
+ขออภัยค่ะ ระบบนี้ใช้สำหรับรับแจ้งเหตุหรือขอความช่วยเหลือเท่านั้น หากต้องการแจ้งเหตุ กรุณาบอกสถานการณ์และสถานที่ค่ะ
+```
+
+Repeated off-topic turns receive a final polite close recommendation:
+
+```text
+ขออภัยค่ะ หากไม่มีเหตุที่ต้องการแจ้ง ระบบจะสิ้นสุดสายนี้นะคะ
+```
+
+Emergency content always overrides off-topic handling. Phrases such as `ช่วยด้วย`, breathing difficulty, trapped people, severe bleeding, drowning, active fire/smoke, unconsciousness, self-harm danger, child risk, or elderly vulnerable risk reset scope counters and continue crisis intake or RED escalation.
+
+Twilio no-reply handling is also optional and uses the existing TTS media sender. It is active only when initial greeting or Twilio TTS speak-back is enabled:
+
+```dotenv
+CALL_NO_REPLY_SECONDS=10
+CALL_NO_REPLY_PROMPT_SECONDS=15
+CALL_MAX_NO_REPLY_PROMPTS=2
+CALL_END_ON_NO_REPLY=true
+TWILIO_FORCE_HANGUP_ENABLED=false
+```
+
+No-reply prompt:
+
+```text
+ยังอยู่ในสายไหมคะ หากต้องการแจ้งเหตุ กรุณาเล่าสถานการณ์สั้น ๆ ได้เลยค่ะ
+```
+
+Final no-reply close:
+
+```text
+หากไม่มีการตอบกลับ ระบบจะสิ้นสุดสายนี้นะคะ
+```
+
+Watch logs for `scope.off_topic`, `scope.emergency_override`, `call.no_reply_prompt`, and `call.no_reply_close`. The `/voice-debug` console shows `off_topic_count`, `redirect_count`, `no_reply_prompt_count`, `call_end_recommended`, `call_end_reason`, `last_assistant_redirect`, and guardrail warnings. No ACS, No SMS, no emergency dispatch, and no automatic closure/rejection of real emergency cases are implemented.
 
 ## Optional Twilio TTS Speak-Back
 
@@ -145,7 +204,7 @@ Default safe settings:
 ```dotenv
 ENABLE_TWILIO_TTS_RESPONSE=false
 ENABLE_TWILIO_INITIAL_GREETING=false
-TWILIO_INITIAL_GREETING_TEXT=สวัสดีค่ะ นารายานาพร้อมรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ
+TWILIO_INITIAL_GREETING_TEXT=สวัสดีค่ะ นี่คือระบบช่วยรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ
 TWILIO_INITIAL_GREETING_PROFILE=greeting
 TWILIO_INITIAL_GREETING_FALLBACK_SAY=false
 AZURE_SPEECH_VOICE=th-TH-PremwadeeNeural
@@ -157,9 +216,11 @@ TTS_RATE_FOLLOWUP=-5%
 TTS_RATE_GREETING=-5%
 TTS_RATE_RED=-12%
 TTS_RATE_UNCLEAR=-8%
+TTS_RATE_CLOSING=-8%
 TTS_PITCH_NORMAL=0%
 TTS_PITCH_GREETING=0%
 TTS_PITCH_RED=-2%
+TTS_PITCH_CLOSING=0%
 TTS_VOLUME=medium
 ```
 
@@ -170,7 +231,7 @@ $env:USE_MOCK_SERVICES="true"
 $env:ENABLE_MULTI_TURN_INTAKE="true"
 $env:ENABLE_TWILIO_TTS_RESPONSE="true"
 $env:ENABLE_TWILIO_INITIAL_GREETING="true"
-$env:TWILIO_INITIAL_GREETING_TEXT="สวัสดีค่ะ นารายานาพร้อมรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ"
+$env:TWILIO_INITIAL_GREETING_TEXT="สวัสดีค่ะ นี่คือระบบช่วยรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ"
 $env:TWILIO_INITIAL_GREETING_PROFILE="greeting"
 $env:AZURE_SPEECH_KEY="<secret>"
 $env:AZURE_SPEECH_REGION="<region>"
@@ -194,7 +255,7 @@ Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8000/api/tts/test" `
   -ContentType "application/json" `
-  -Body '{"text":"สวัสดีค่ะ นารายานาพร้อมรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ","profile":"greeting"}'
+  -Body '{"text":"สวัสดีค่ะ นี่คือระบบช่วยรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ","profile":"greeting"}'
 ```
 
 Expected when configured:
@@ -221,7 +282,7 @@ During a Twilio call, the backend still sends the normal JSON debug or case payl
 
 Initial greeting speak-back is separate from response speak-back. When `ENABLE_TWILIO_INITIAL_GREETING=true`, Narayana speaks the configured Thai greeting once after the Twilio stream starts, then continues listening. Watch Container App logs for `greeting.started` and `greeting.completed`; if synthesis is unavailable or fails, `greeting.failed` is logged and the call continues.
 
-SSML is enabled by default for Azure Speech TTS. Narayana uses only `prosody` rate, pitch, and volume controls rather than style names, so the voice remains compatible with Thai neural voices. Profiles are selected from the Twilio payload: the initial greeting uses `greeting`, follow-up questions use `followup`, RED or human-escalation responses use `red`, unclear/fallback transcript responses use `unclear`, and sanitized unsafe text uses `safe_fallback`.
+SSML is enabled by default for Azure Speech TTS. Narayana uses only `prosody` rate, pitch, and volume controls rather than style names, so the voice remains compatible with Thai neural voices. Profiles are selected from the Twilio payload: the initial greeting uses `greeting`, follow-up questions use `followup`, RED or human-escalation responses use `red`, unclear/fallback transcript responses use `unclear`, no-reply final messages use `closing`, and sanitized unsafe text uses `safe_fallback`.
 
 Spoken text is sanitized before synthesis. Narayana must not say rescue was dispatched, an ambulance is on the way, give a diagnosis, close/reject an emergency, or provide long unsafe guidance. If synthesis fails, the call continues and case creation or follow-up output is not blocked.
 

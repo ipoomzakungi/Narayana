@@ -125,8 +125,28 @@ export interface IntakeSessionState {
   status: string;
   guardrail_warnings: string[];
   decision_audit: Record<string, unknown>[];
+  off_topic_count?: number;
+  redirect_count?: number;
+  last_off_topic_at?: string | null;
+  last_assistant_redirect?: string;
+  no_reply_prompt_count?: number;
+  last_caller_speech_at?: string | null;
+  greeting_sent_at?: string | null;
+  call_end_recommended?: boolean;
+  call_end_reason?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ScopeDebugFields {
+  off_topic_count?: number;
+  redirect_count?: number;
+  no_reply_prompt_count?: number;
+  call_end_recommended?: boolean;
+  call_end_reason?: string;
+  last_assistant_redirect?: string;
+  guardrail_warnings?: string[];
+  response_text?: string;
 }
 
 export interface IntakeResponse {
@@ -141,6 +161,12 @@ export interface IntakeResponse {
   missing_fields: string[];
   reason: string;
   guardrail_warnings: string[];
+  off_topic_count?: number;
+  redirect_count?: number;
+  no_reply_prompt_count?: number;
+  call_end_recommended?: boolean;
+  call_end_reason?: string;
+  last_assistant_redirect?: string;
   created_case: CaseRepositoryRecord | null;
 }
 
@@ -184,6 +210,12 @@ export type VoiceWsMessage =
         guardrail_warnings: string[];
         partial_state: IntakeSessionState;
       };
+      off_topic_count?: number;
+      redirect_count?: number;
+      no_reply_prompt_count?: number;
+      call_end_recommended?: boolean;
+      call_end_reason?: string;
+      last_assistant_redirect?: string;
       tts?: TTSDebugStatus;
       source_input_mode?: SourceInputMode;
       call_metadata?: CallMetadata;
@@ -202,6 +234,12 @@ export type VoiceWsMessage =
       missing_fields: string[];
       reason: string;
       guardrail_warnings: string[];
+      off_topic_count?: number;
+      redirect_count?: number;
+      no_reply_prompt_count?: number;
+      call_end_recommended?: boolean;
+      call_end_reason?: string;
+      last_assistant_redirect?: string;
       warnings?: string[];
       provider_mode?: ProviderMode;
       transcript_source?: TranscriptSource;
@@ -210,5 +248,9 @@ export type VoiceWsMessage =
       source_input_mode?: SourceInputMode;
       call_metadata?: CallMetadata;
     }
+  | ({
+      type: "call.no_reply_prompt" | "call.ending";
+      session_id: string;
+    } & ScopeDebugFields)
   | { type: "error"; detail: string }
   | { type: "session.closed"; session_id: string };
