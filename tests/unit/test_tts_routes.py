@@ -72,6 +72,41 @@ def test_tts_test_route_uses_mocked_configured_service(monkeypatch) -> None:
     assert "payloads" not in payload
 
 
+def test_tts_test_route_accepts_greeting_profile(monkeypatch) -> None:
+    import app.api.routes_tts as routes_tts
+
+    class MockService:
+        def __init__(self, settings):
+            self.settings = settings
+
+        async def synthesize_twilio_mulaw(self, text: str, *, voice=None, profile="normal", session_id=None, call_id=None):
+            return TTSResult(
+                configured=True,
+                voice=voice or "th-TH-PremwadeeNeural",
+                profile=profile,
+                total_bytes=160,
+                estimated_duration_ms=20,
+                sanitized_text=text,
+            ).with_payloads(["abcd"])
+
+    monkeypatch.setattr(routes_tts, "AzureSpeechTTSService", MockService)
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        azure_speech_key="key",
+        azure_speech_region="eastus",
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/tts/test", json={"text": "สวัสดีค่ะ", "profile": "greeting"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["configured"] is True
+    assert payload["profile"] == "greeting"
+    assert payload["payload_count"] == 1
+    assert "payloads" not in payload
+
+
 def test_tts_test_route_safety_response_does_not_return_unsafe_text() -> None:
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: Settings()

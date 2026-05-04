@@ -198,6 +198,149 @@ def test_twilio_media_stream_reports_malformed_media_without_credentials(monkeyp
     assert "base64" in message["detail"]
 
 
+def test_twilio_start_does_not_send_initial_greeting_by_default(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    monkeypatch.setattr(routes_twilio, "get_settings", lambda: Settings(use_mock_services=True))
+    client = TestClient(create_app())
+
+    with client.websocket_connect("/ws/telephony/twilio/CA123") as websocket:
+        websocket.send_json(
+            {
+                "event": "start",
+                "sequenceNumber": "1",
+                "start": {
+                    "callSid": "CA123",
+                    "streamSid": "MZ123",
+                    "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
+                },
+            }
+        )
+        assert websocket.receive_json()["type"] == "session.started"
+        close_twilio_ws(websocket)
+
+
+def test_twilio_start_sends_initial_greeting_media_and_mark(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    class MockTTSService:
+        configured = True
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        def missing_variables(self):
+            return []
+
+        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None, profile="normal"):
+            assert text == "สวัสดีค่ะ แจ้งเหตุได้เลยค่ะ"
+            assert profile == "greeting"
+            return TTSResult(
+                configured=True,
+                voice="th-TH-PremwadeeNeural",
+                profile=profile,
+                total_bytes=320,
+                estimated_duration_ms=40,
+                sanitized_text=text,
+            ).with_payloads(["abcd", "efgh"])
+
+    monkeypatch.setattr(
+        routes_twilio,
+        "get_settings",
+        lambda: Settings(
+            use_mock_services=True,
+            enable_twilio_initial_greeting=True,
+            twilio_initial_greeting_text="สวัสดีค่ะ แจ้งเหตุได้เลยค่ะ",
+            azure_speech_key="key",
+            azure_speech_region="eastus",
+        ),
+    )
+    monkeypatch.setattr(routes_twilio, "AzureSpeechTTSService", MockTTSService)
+    client = TestClient(create_app())
+
+    with client.websocket_connect("/ws/telephony/twilio/CA123") as websocket:
+        websocket.send_json(
+            {
+                "event": "start",
+                "sequenceNumber": "1",
+                "start": {
+                    "callSid": "CA123",
+                    "streamSid": "MZ123",
+                    "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
+                },
+            }
+        )
+        messages = [websocket.receive_json(), websocket.receive_json(), websocket.receive_json(), websocket.receive_json()]
+        close_twilio_ws(websocket)
+
+    assert messages[0]["type"] == "session.started"
+    assert messages[1] == {"event": "media", "streamSid": "MZ123", "media": {"payload": "abcd"}}
+    assert messages[2] == {"event": "media", "streamSid": "MZ123", "media": {"payload": "efgh"}}
+    assert messages[3] == {
+        "event": "mark",
+        "streamSid": "MZ123",
+        "mark": {"name": "narayana_initial_greeting"},
+    }
+
+
+def test_twilio_initial_greeting_failure_continues_media_flow(tmp_path, monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    class FailingTTSService:
+        configured = True
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        def missing_variables(self):
+            return []
+
+        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None, profile="normal"):
+            raise RuntimeError("tts unavailable")
+
+    monkeypatch.setattr(
+        routes_twilio,
+        "get_settings",
+        lambda: Settings(
+            use_mock_services=True,
+            enable_twilio_initial_greeting=True,
+            azure_speech_key="key",
+            azure_speech_region="eastus",
+            case_store_path=str(tmp_path / "cases.json"),
+            audio_store_path=str(tmp_path / "audio"),
+        ),
+    )
+    monkeypatch.setattr(routes_twilio, "AzureSpeechTTSService", FailingTTSService)
+    client = TestClient(create_app())
+
+    with client.websocket_connect("/ws/telephony/twilio/CA123") as websocket:
+        websocket.send_json(
+            {
+                "event": "start",
+                "sequenceNumber": "1",
+                "start": {
+                    "callSid": "CA123",
+                    "streamSid": "MZ123",
+                    "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
+                },
+            }
+        )
+        assert websocket.receive_json()["type"] == "session.started"
+        websocket.send_json(media(2, 24000))
+        for sequence in range(3, 42):
+            websocket.send_json(media(sequence, 0))
+
+        messages = []
+        for _ in range(100):
+            message = websocket.receive_json()
+            messages.append(message)
+            if message["type"] == "triage.case.created":
+                break
+        close_twilio_ws(websocket)
+
+    assert any(message["type"] == "triage.case.created" for message in messages)
+
+
 def test_twilio_speakback_sends_json_then_media_and_mark(tmp_path, monkeypatch) -> None:
     import app.api.routes_twilio as routes_twilio
     import app.services.audio_session_processor as processor_module

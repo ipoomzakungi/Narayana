@@ -101,6 +101,9 @@ class AzureHealth(BaseModel):
     azure_voice_live_configured: bool
     cosmos_configured: bool
     twilio_tts_response_enabled: bool = False
+    twilio_initial_greeting_enabled: bool = False
+    twilio_initial_greeting_text_configured: bool = False
+    twilio_initial_greeting_profile: str = "greeting"
     azure_speech_tts_configured: bool = False
     azure_speech_voice: str = "th-TH-PremwadeeNeural"
     tts_use_ssml: bool = True
