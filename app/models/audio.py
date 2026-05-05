@@ -82,6 +82,7 @@ class CallerTurn(BaseModel):
     duration_ms: int
     pre_speech_padding_ms: int
     silence_threshold_ms: int
+    min_speech_ms: int = 0
     audio_ref: str | None = None
     audio_debug_id: str | None = None
     barge_in: bool = False

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from app.models.intake import CaseGroup, IntakeAction, IntakeDecision, IntakeSessionStatus
+from datetime import timedelta
+
+from app.models.intake import CaseGroup, ConversationSpeaker, IntakeAction, IntakeDecision, IntakeSessionStatus
 from app.models.triage import TriageLevel
 from app.services.intake_session_store import IntakeSessionStore
 
@@ -49,3 +51,37 @@ def test_session_store_clear() -> None:
     store.clear("session_1")
 
     assert store.snapshot("session_1") is None
+
+
+def test_append_timeline_event_and_list_recent() -> None:
+    store = IntakeSessionStore()
+    first = store.get_or_create("session_a", call_id="CA_A")
+    store.append_timeline_event(
+        first.session_id,
+        event_type="caller.turn.transcribed",
+        speaker=ConversationSpeaker.CALLER,
+        text="น้ำท่วม",
+        metadata={"sequence": 1},
+    )
+    second = store.get_or_create("session_b", call_id="CA_B")
+    store.mark_final(second.session_id, "case_b", IntakeSessionStatus.CASE_CREATED)
+    second.updated_at = first.updated_at + timedelta(seconds=1)
+
+    recent = store.list_recent(limit=2)
+
+    assert [state.session_id for state in recent] == ["session_b", "session_a"]
+    assert recent[1].timeline_events[0].type == "caller.turn.transcribed"
+    assert recent[1].timeline_events[0].text == "น้ำท่วม"
+    assert recent[1].timeline_events[0].metadata["sequence"] == 1
+
+
+def test_get_by_call_id_returns_snapshot() -> None:
+    store = IntakeSessionStore()
+    store.get_or_create("twilio_CA123", call_id="CA123")
+
+    found = store.get_by_call_id("CA123")
+
+    assert found is not None
+    assert found.session_id == "twilio_CA123"
+    found.call_id = "mutated"
+    assert store.get_by_call_id("CA123").call_id == "CA123"

@@ -19,7 +19,14 @@ def test_telephony_defaults_keep_local_mic_and_no_provider() -> None:
     assert settings.assistant_scope == "crisis_intake_only"
     assert "emergency" in settings.assistant_allowed_topics
     assert settings.assistant_decline_off_topic is True
-    assert settings.call_no_reply_seconds == 10
+    assert settings.turn_silence_threshold_ms == 750
+    assert settings.turn_pre_speech_padding_ms == 200
+    assert settings.vad_energy_threshold == 0.02
+    assert settings.min_speech_ms == 300
+    assert settings.call_audit_enabled is True
+    assert settings.call_audit_log_transcripts is True
+    assert settings.call_audit_max_sessions == 50
+    assert settings.call_no_reply_seconds == 15
     assert settings.call_no_reply_prompt_seconds == 15
     assert settings.call_max_no_reply_prompts == 2
     assert settings.call_max_off_topic_redirects == 2
@@ -105,6 +112,13 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     monkeypatch.setenv("CALL_MAX_OFF_TOPIC_REDIRECTS", "1")
     monkeypatch.setenv("CALL_END_ON_REPEATED_OFF_TOPIC", "false")
     monkeypatch.setenv("CALL_END_ON_NO_REPLY", "false")
+    monkeypatch.setenv("TURN_SILENCE_THRESHOLD_MS", "500")
+    monkeypatch.setenv("TURN_PRE_SPEECH_PADDING_MS", "180")
+    monkeypatch.setenv("VAD_ENERGY_THRESHOLD", "0.015")
+    monkeypatch.setenv("MIN_SPEECH_MS", "320")
+    monkeypatch.setenv("CALL_AUDIT_ENABLED", "false")
+    monkeypatch.setenv("CALL_AUDIT_LOG_TRANSCRIPTS", "false")
+    monkeypatch.setenv("CALL_AUDIT_MAX_SESSIONS", "12")
     monkeypatch.setenv("TWILIO_FORCE_HANGUP_ENABLED", "true")
     reset_settings_cache()
 
@@ -136,6 +150,13 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     assert settings.call_max_off_topic_redirects == 1
     assert settings.call_end_on_repeated_off_topic is False
     assert settings.call_end_on_no_reply is False
+    assert settings.turn_silence_threshold_ms == 500
+    assert settings.turn_pre_speech_padding_ms == 180
+    assert settings.vad_energy_threshold == 0.015
+    assert settings.min_speech_ms == 320
+    assert settings.call_audit_enabled is False
+    assert settings.call_audit_log_transcripts is False
+    assert settings.call_audit_max_sessions == 12
     assert settings.twilio_force_hangup_enabled is True
     assert settings.azure_speech_tts_configured is False
     assert settings.missing_azure_speech_tts_variables() == ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"]

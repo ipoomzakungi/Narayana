@@ -96,6 +96,11 @@ class AudioBufferService:
             duration_ms=duration_ms,
         )
 
+    def discard_active_turn(self, session_id: str) -> None:
+        session = self._session(session_id)
+        session.active = False
+        session.active_frames = []
+
     def _session(self, session_id: str) -> SessionAudioBuffer:
         if session_id not in self._sessions:
             self._sessions[session_id] = SessionAudioBuffer(pre_frames=deque(maxlen=self._pre_frame_limit))

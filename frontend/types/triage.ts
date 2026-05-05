@@ -95,6 +95,21 @@ export interface ConversationTurn {
   turn_index: number;
 }
 
+export interface CallAuditTimelineEvent {
+  event_id: string;
+  type: string;
+  speaker?: "caller" | "assistant" | "system" | null;
+  text?: string | null;
+  tts_profile?: string | null;
+  tts_status?: string | null;
+  triage_level?: TriageLevel | null;
+  case_group?: CaseGroup | string | null;
+  recommended_team?: string | null;
+  guardrail_warnings: string[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface IntakeCollectedFields {
   language: string;
   incident_type: IncidentType;
@@ -113,6 +128,7 @@ export interface IntakeSessionState {
   call_id?: string | null;
   source_input_mode: string;
   conversation_turns: ConversationTurn[];
+  timeline_events?: CallAuditTimelineEvent[];
   collected_fields: IntakeCollectedFields;
   triage_level?: TriageLevel | null;
   confidence: number;
@@ -136,6 +152,13 @@ export interface IntakeSessionState {
   call_end_reason?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface IntakeSessionListResponse {
+  generated_at: string;
+  count: number;
+  limit: number;
+  sessions: IntakeSessionState[];
 }
 
 export interface ScopeDebugFields {

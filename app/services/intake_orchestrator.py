@@ -4,6 +4,7 @@ from app.core.config import Settings
 from app.models.case import CrisisCase
 from app.models.intake import (
     CaseGroup,
+    ConversationSpeaker,
     IntakeAction,
     IntakeCollectedFields,
     IntakeDecision,
@@ -14,6 +15,7 @@ from app.models.intake import (
 )
 from app.models.triage import CaseStatus, IncidentType, ProviderMode, TriageLevel
 from app.services.azure_openai_intake_provider import AzureOpenAIIntakeProvider
+from app.services.call_audit_logger import append_audit_event
 from app.services.case_grouping_service import group_case, group_requires_human_review
 from app.services.case_repository import get_case_repository
 from app.services.intake_guardrails import evaluate_intake_guardrails, response_mentions_forbidden_dispatch
@@ -44,6 +46,15 @@ class IntakeOrchestrator:
             state.collected_fields.caller_phone_optional = request.caller_phone_optional
 
         self.store.append_caller_turn(request.session_id, request.transcript)
+        append_audit_event(
+            self.store,
+            self.settings,
+            request.session_id,
+            event_type="caller.turn.transcribed",
+            speaker=ConversationSpeaker.CALLER,
+            text=request.transcript,
+            metadata={"source_input_mode": request.source_input_mode},
+        )
         scope = classify_scope(request.transcript, state, self.settings)
         if scope.is_emergency_signal:
             self._reset_scope_state_for_emergency(state, scope.guardrail_warnings)
@@ -69,11 +80,48 @@ class IntakeOrchestrator:
             state.status = IntakeSessionStatus.WAITING_FOR_FOLLOWUP
             self.store.append_assistant_turn(request.session_id, decision.response_text)
             self.store.update_state(request.session_id, decision)
+            append_audit_event(
+                self.store,
+                self.settings,
+                request.session_id,
+                event_type="intake.followup",
+                speaker=ConversationSpeaker.ASSISTANT,
+                text=decision.response_text,
+                triage_level=decision.triage_level,
+                case_group=decision.case_group.value,
+                recommended_team=decision.recommended_team,
+                guardrail_warnings=decision.guardrail_warnings,
+                metadata={"missing_fields": decision.missing_fields, "reason": decision.reason},
+            )
             self.store.save(state)
         else:
             self.store.append_assistant_turn(request.session_id, decision.response_text)
             self.store.update_state(request.session_id, decision)
             created_case = await self._create_case(state, decision)
+            append_audit_event(
+                self.store,
+                self.settings,
+                request.session_id,
+                event_type="assistant.response",
+                speaker=ConversationSpeaker.ASSISTANT,
+                text=decision.response_text,
+                triage_level=decision.triage_level,
+                case_group=decision.case_group.value,
+                recommended_team=decision.recommended_team,
+                guardrail_warnings=decision.guardrail_warnings,
+                metadata={"case_id": created_case.case.case_id, "reason": decision.reason},
+            )
+            append_audit_event(
+                self.store,
+                self.settings,
+                request.session_id,
+                event_type="triage.case.created",
+                triage_level=decision.triage_level,
+                case_group=decision.case_group.value,
+                recommended_team=decision.recommended_team,
+                guardrail_warnings=decision.guardrail_warnings,
+                metadata={"case_id": created_case.case.case_id},
+            )
             final_status = (
                 IntakeSessionStatus.ESCALATED
                 if decision.action == IntakeAction.ESCALATE_HUMAN_REVIEW
@@ -117,6 +165,16 @@ class IntakeOrchestrator:
         state.guardrail_warnings = _merge_unique(state.guardrail_warnings, scope.guardrail_warnings)
         state.status = IntakeSessionStatus.WAITING_FOR_FOLLOWUP
         self.store.append_assistant_turn(state.session_id, scope.response_text)
+        append_audit_event(
+            self.store,
+            self.settings,
+            state.session_id,
+            event_type="intake.followup",
+            speaker=ConversationSpeaker.ASSISTANT,
+            text=scope.response_text,
+            guardrail_warnings=scope.guardrail_warnings,
+            metadata={"reason": scope.reason, "off_topic_count": state.off_topic_count},
+        )
         state.decision_audit.append(
             {
                 "action": "scope_off_topic",

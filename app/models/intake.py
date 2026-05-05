@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -61,6 +62,29 @@ class ConversationTurn(BaseModel):
         return value
 
 
+class CallAuditTimelineEvent(BaseModel):
+    event_id: str = Field(default_factory=lambda: f"audit_{uuid4().hex[:12]}")
+    type: str = Field(min_length=1)
+    speaker: ConversationSpeaker | None = None
+    text: str | None = None
+    tts_profile: str | None = None
+    tts_status: str | None = None
+    triage_level: TriageLevel | None = None
+    case_group: str | None = None
+    recommended_team: str | None = None
+    guardrail_warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("text")
+    @classmethod
+    def trim_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
 class IntakeCollectedFields(BaseModel):
     language: str = "th"
     incident_type: IncidentType = IncidentType.UNKNOWN
@@ -104,6 +128,7 @@ class IntakeSessionState(BaseModel):
     call_id: str | None = None
     source_input_mode: str = "manual"
     conversation_turns: list[ConversationTurn] = Field(default_factory=list)
+    timeline_events: list[CallAuditTimelineEvent] = Field(default_factory=list)
     collected_fields: IntakeCollectedFields = Field(default_factory=IntakeCollectedFields)
     triage_level: TriageLevel | None = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -213,3 +238,10 @@ class IntakeResponse(BaseModel):
         if self.action in {IntakeAction.CREATE_CASE, IntakeAction.ESCALATE_HUMAN_REVIEW} and self.created_case is None:
             raise ValueError("case actions require created_case")
         return self
+
+
+class IntakeSessionListResponse(BaseModel):
+    generated_at: datetime = Field(default_factory=utc_now)
+    count: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    sessions: list[IntakeSessionState] = Field(default_factory=list)

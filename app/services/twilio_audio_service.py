@@ -121,6 +121,15 @@ def build_twilio_mark_event(stream_sid: str, name: str) -> dict[str, Any]:
     }
 
 
+def build_twilio_clear_event(stream_sid: str) -> dict[str, Any]:
+    if not stream_sid:
+        raise TwilioMediaError("Twilio streamSid is required for clear.")
+    return {
+        "event": "clear",
+        "streamSid": stream_sid,
+    }
+
+
 def estimate_audio_duration_ms(byte_count: int, *, sample_rate_hz: int = 8000) -> int:
     if byte_count <= 0 or sample_rate_hz <= 0:
         return 0

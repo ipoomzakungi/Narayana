@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime
 
 from app.models.intake import (
+    CallAuditTimelineEvent,
     ConversationSpeaker,
     ConversationTurn,
     IntakeDecision,
@@ -80,6 +81,53 @@ class IntakeSessionStore:
         state.touch()
         return state
 
+    def append_timeline_event(
+        self,
+        session_id: str,
+        *,
+        event_type: str,
+        speaker: ConversationSpeaker | None = None,
+        text: str | None = None,
+        tts_profile: str | None = None,
+        tts_status: str | None = None,
+        triage_level=None,
+        case_group: str | None = None,
+        recommended_team: str | None = None,
+        guardrail_warnings: list[str] | None = None,
+        metadata: dict | None = None,
+        log_transcripts: bool = True,
+        max_sessions: int | None = None,
+    ) -> CallAuditTimelineEvent:
+        state = self._sessions[session_id]
+        event = CallAuditTimelineEvent(
+            type=event_type,
+            speaker=speaker,
+            text=text if log_transcripts else None,
+            tts_profile=tts_profile,
+            tts_status=tts_status,
+            triage_level=triage_level,
+            case_group=case_group,
+            recommended_team=recommended_team,
+            guardrail_warnings=guardrail_warnings or [],
+            metadata=metadata or {},
+        )
+        state.timeline_events.append(event)
+        state.touch()
+        if max_sessions:
+            self._trim(max_sessions)
+        return event
+
+    def list_recent(self, limit: int = 50) -> list[IntakeSessionState]:
+        safe_limit = max(1, limit)
+        states = sorted(self._sessions.values(), key=lambda item: item.updated_at, reverse=True)
+        return [deepcopy(state) for state in states[:safe_limit]]
+
+    def get_by_call_id(self, call_id: str) -> IntakeSessionState | None:
+        for state in self._sessions.values():
+            if state.call_id == call_id:
+                return deepcopy(state)
+        return None
+
     def mark_greeting_sent(self, session_id: str, when: datetime | None = None) -> IntakeSessionState:
         from app.models.intake import utc_now
 
@@ -139,6 +187,15 @@ class IntakeSessionStore:
         state.status = status
         state.touch()
         return state
+
+    def _trim(self, max_sessions: int) -> None:
+        if max_sessions <= 0 or len(self._sessions) <= max_sessions:
+            return
+        states = sorted(self._sessions.values(), key=lambda item: item.updated_at, reverse=True)
+        keep = {state.session_id for state in states[:max_sessions]}
+        for session_id in list(self._sessions):
+            if session_id not in keep:
+                self._sessions.pop(session_id, None)
 
     def _append_turn(self, session_id: str, speaker: ConversationSpeaker, text: str) -> ConversationTurn:
         state = self._sessions[session_id]

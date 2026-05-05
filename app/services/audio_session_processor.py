@@ -5,14 +5,17 @@ import logging
 from app.core.config import Settings
 from app.models.audio import AudioDebugEvent, AudioDebugEventType, AudioFrame, VadState
 from app.models.case import CrisisCase
-from app.models.intake import IntakeAction, IntakeRequest, IntakeResponse
+from app.models.intake import ConversationSpeaker, IntakeAction, IntakeRequest, IntakeResponse
 from app.models.telephony import CallMetadata
 from app.models.triage import ProviderMode
 from app.services.audio_buffer_service import AudioBufferError, AudioBufferService
 from app.services.case_repository import get_case_repository
+from app.services.call_audit_logger import append_audit_event, log_call_event
 from app.services.intake_orchestrator import IntakeOrchestrator
+from app.services.intake_session_store import get_intake_session_store
 from app.services.safety_rules import apply_safety_rules
 from app.services.turn_manager import TurnManager
+from app.services.vad_service import EnergyVadService
 from app.services.voice_agent_provider import get_voice_provider
 
 logger = logging.getLogger(__name__)
@@ -48,8 +51,16 @@ class AudioSessionProcessor:
         self.requested_mode = requested_mode
         self.source_input_mode = source_input_mode
         self.call_metadata = call_metadata
-        self.manager = TurnManager()
-        self.audio_buffer = AudioBufferService(settings.audio_store_path)
+        self.manager = TurnManager(
+            vad=EnergyVadService(threshold=settings.vad_energy_threshold),
+            silence_threshold_ms=settings.turn_silence_threshold_ms,
+            pre_speech_padding_ms=settings.turn_pre_speech_padding_ms,
+            min_speech_ms=settings.min_speech_ms,
+        )
+        self.audio_buffer = AudioBufferService(
+            settings.audio_store_path,
+            pre_speech_padding_ms=settings.turn_pre_speech_padding_ms,
+        )
         self.debug_events: list[AudioDebugEvent] = []
 
     def assistant_playback_started(self) -> dict:
@@ -77,6 +88,8 @@ class AudioSessionProcessor:
             result = self.manager.process_frame(frame)
             speech_started = any(event.event_type == AudioDebugEventType.VAD_SPEECH_START for event in result.events)
             self.audio_buffer.observe_frame(frame, speech_started=speech_started)
+            if any(event.metadata.get("discarded_short_speech") for event in result.events):
+                self.audio_buffer.discard_active_turn(frame.session_id)
         except (AudioBufferError, ValueError) as exc:
             return [{"type": "error", "detail": str(exc)}]
 
@@ -91,6 +104,20 @@ class AudioSessionProcessor:
                 )
                 result.committed_turn.audio_ref = audio_result.audio_ref
                 result.committed_turn.audio_debug_id = audio_result.audio_debug_id
+                log_call_event(
+                    logger,
+                    "caller.turn.committed",
+                    session_id=self.session_id,
+                    call_id=self.call_metadata.call_id if self.call_metadata else None,
+                    metadata={"turn_id": result.committed_turn.turn_id, "audio_debug_id": audio_result.audio_debug_id},
+                )
+                append_audit_event(
+                    get_intake_session_store(self.settings.assistant_max_followups),
+                    self.settings,
+                    self.session_id,
+                    event_type="caller.turn.committed",
+                    metadata={"turn_id": result.committed_turn.turn_id, "audio_debug_id": audio_result.audio_debug_id},
+                )
                 for event in result.events:
                     if event.event_type == AudioDebugEventType.TURN_COMMITTED:
                         event.metadata.update(
@@ -98,6 +125,10 @@ class AudioSessionProcessor:
                                 "audio_ref": audio_result.audio_ref,
                                 "audio_debug_id": audio_result.audio_debug_id,
                                 "audio_frame_count": audio_result.frame_count,
+                                "silence_threshold_ms": self.settings.turn_silence_threshold_ms,
+                                "pre_speech_padding_ms": self.settings.turn_pre_speech_padding_ms,
+                                "vad_energy_threshold": self.settings.vad_energy_threshold,
+                                "min_speech_ms": self.settings.min_speech_ms,
                             }
                         )
             except AudioBufferError as exc:
@@ -123,6 +154,30 @@ class AudioSessionProcessor:
 
         provider = get_voice_provider(self.settings, self.requested_mode)
         provider_result = await provider.process_turn(result.committed_turn)
+        log_call_event(
+            logger,
+            "caller.turn.transcribed",
+            session_id=self.session_id,
+            call_id=self.call_metadata.call_id if self.call_metadata else None,
+            metadata={
+                "turn_id": result.committed_turn.turn_id,
+                "transcript_source": provider_result.transcript_source,
+                "provider_mode": provider_result.provider_mode.value,
+            },
+        )
+        append_audit_event(
+            get_intake_session_store(self.settings.assistant_max_followups),
+            self.settings,
+            self.session_id,
+            event_type="caller.turn.transcribed",
+            speaker=ConversationSpeaker.CALLER,
+            text=provider_result.transcript,
+            metadata={
+                "turn_id": result.committed_turn.turn_id,
+                "transcript_source": provider_result.transcript_source,
+                "provider_mode": provider_result.provider_mode.value,
+            },
+        )
 
         if self.settings.enable_multi_turn_intake:
             transcript = provider_result.transcript.strip()
@@ -167,6 +222,23 @@ class AudioSessionProcessor:
             record.case.triage_level.value,
             self.session_id,
         )
+        log_call_event(
+            logger,
+            "assistant.response",
+            session_id=self.session_id,
+            call_id=self.call_metadata.call_id if self.call_metadata else None,
+            metadata={"response_text_present": bool(provider_result.response_text), "payload_type": "triage.case.created"},
+        )
+        append_audit_event(
+            get_intake_session_store(self.settings.assistant_max_followups),
+            self.settings,
+            self.session_id,
+            event_type="assistant.response",
+            speaker=ConversationSpeaker.ASSISTANT,
+            text=provider_result.response_text,
+            triage_level=record.case.triage_level,
+            metadata={"payload_type": "triage.case.created", "case_id": record.case.case_id},
+        )
         case_payload = {
             "type": "triage.case.created",
             "session_id": self.session_id,
@@ -196,6 +268,33 @@ class AudioSessionProcessor:
         warnings: list[str],
     ) -> dict:
         if intake_response.action == IntakeAction.ASK_FOLLOWUP:
+            log_call_event(
+                logger,
+                "intake.followup",
+                session_id=self.session_id,
+                call_id=self.call_metadata.call_id if self.call_metadata else None,
+                metadata={"case_group": intake_response.case_group.value, "triage_level": intake_response.triage_level.value},
+            )
+            append_audit_event(
+                get_intake_session_store(self.settings.assistant_max_followups),
+                self.settings,
+                self.session_id,
+                event_type="intake.followup",
+                speaker=ConversationSpeaker.ASSISTANT,
+                text=intake_response.response_text,
+                triage_level=intake_response.triage_level,
+                case_group=intake_response.case_group.value,
+                recommended_team=intake_response.recommended_team,
+                guardrail_warnings=intake_response.guardrail_warnings,
+                metadata={"missing_fields": intake_response.missing_fields, "reason": intake_response.reason},
+            )
+            log_call_event(
+                logger,
+                "assistant.response",
+                session_id=self.session_id,
+                call_id=self.call_metadata.call_id if self.call_metadata else None,
+                metadata={"payload_type": "intake.followup", "response_text_present": bool(intake_response.response_text)},
+            )
             payload: dict = {
                 "type": "intake.followup",
                 "session_id": self.session_id,
@@ -223,6 +322,41 @@ class AudioSessionProcessor:
                 record.case.case_id if record else None,
                 record.case.triage_level.value if record else None,
                 self.session_id,
+            )
+            log_call_event(
+                logger,
+                "assistant.response",
+                session_id=self.session_id,
+                call_id=self.call_metadata.call_id if self.call_metadata else None,
+                metadata={
+                    "payload_type": "triage.case.created",
+                    "case_id": record.case.case_id if record else None,
+                    "response_text_present": bool(intake_response.response_text),
+                },
+            )
+            append_audit_event(
+                get_intake_session_store(self.settings.assistant_max_followups),
+                self.settings,
+                self.session_id,
+                event_type="assistant.response",
+                speaker=ConversationSpeaker.ASSISTANT,
+                text=intake_response.response_text,
+                triage_level=intake_response.triage_level,
+                case_group=intake_response.case_group.value,
+                recommended_team=intake_response.recommended_team,
+                guardrail_warnings=intake_response.guardrail_warnings,
+                metadata={"payload_type": "triage.case.created", "case_id": record.case.case_id if record else None},
+            )
+            append_audit_event(
+                get_intake_session_store(self.settings.assistant_max_followups),
+                self.settings,
+                self.session_id,
+                event_type="triage.case.created",
+                triage_level=intake_response.triage_level,
+                case_group=intake_response.case_group.value,
+                recommended_team=intake_response.recommended_team,
+                guardrail_warnings=intake_response.guardrail_warnings,
+                metadata={"case_id": record.case.case_id if record else None},
             )
             payload = {
                 "type": "triage.case.created",
