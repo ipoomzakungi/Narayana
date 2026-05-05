@@ -46,6 +46,12 @@ class Settings:
     azure_openai_api_key: str = ""
     azure_openai_deployment: str = ""
     azure_openai_api_version: str = ""
+    enable_realtime_voice: bool = False
+    realtime_provider: str = "none"
+    azure_realtime_endpoint: str = ""
+    azure_realtime_api_key: str = ""
+    azure_realtime_deployment: str = ""
+    azure_realtime_api_version: str = ""
     azure_voice_live_endpoint: str = ""
     azure_voice_live_model: str = ""
     cosmos_db_endpoint: str = ""
@@ -124,6 +130,12 @@ class Settings:
             azure_openai_api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
             azure_openai_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT", ""),
             azure_openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION", ""),
+            enable_realtime_voice=_truthy(os.getenv("ENABLE_REALTIME_VOICE"), default=False),
+            realtime_provider=os.getenv("REALTIME_PROVIDER", "none"),
+            azure_realtime_endpoint=os.getenv("AZURE_REALTIME_ENDPOINT", ""),
+            azure_realtime_api_key=os.getenv("AZURE_REALTIME_API_KEY", ""),
+            azure_realtime_deployment=os.getenv("AZURE_REALTIME_DEPLOYMENT", ""),
+            azure_realtime_api_version=os.getenv("AZURE_REALTIME_API_VERSION", ""),
             azure_voice_live_endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT", ""),
             azure_voice_live_model=os.getenv("AZURE_VOICE_LIVE_MODEL", ""),
             cosmos_db_endpoint=os.getenv("COSMOS_DB_ENDPOINT", ""),
@@ -228,6 +240,69 @@ class Settings:
     @property
     def azure_voice_live_configured(self) -> bool:
         return bool(self.azure_voice_live_endpoint and self.azure_voice_live_model)
+
+    @property
+    def normalized_realtime_provider(self) -> str:
+        provider = self.realtime_provider.strip().lower() or "none"
+        if provider in {"none", "azure_voice_live", "azure_openai_realtime"}:
+            return provider
+        return "none"
+
+    @property
+    def azure_openai_realtime_configured(self) -> bool:
+        return bool(
+            self.azure_realtime_endpoint
+            and self.azure_realtime_api_key
+            and self.azure_realtime_deployment
+            and self.azure_realtime_api_version
+        )
+
+    @property
+    def azure_voice_live_realtime_configured(self) -> bool:
+        return bool(self.azure_voice_live_endpoint and self.azure_voice_live_model and self.azure_realtime_api_key)
+
+    @property
+    def realtime_configured(self) -> bool:
+        if not self.enable_realtime_voice:
+            return False
+        if self.normalized_realtime_provider == "azure_openai_realtime":
+            return self.azure_openai_realtime_configured
+        if self.normalized_realtime_provider == "azure_voice_live":
+            return self.azure_voice_live_realtime_configured
+        return False
+
+    def missing_realtime_variables(self) -> list[str]:
+        if not self.enable_realtime_voice or self.normalized_realtime_provider == "none":
+            return []
+        if self.normalized_realtime_provider == "azure_openai_realtime":
+            checks = {
+                "AZURE_REALTIME_ENDPOINT": self.azure_realtime_endpoint,
+                "AZURE_REALTIME_API_KEY": self.azure_realtime_api_key,
+                "AZURE_REALTIME_DEPLOYMENT": self.azure_realtime_deployment,
+                "AZURE_REALTIME_API_VERSION": self.azure_realtime_api_version,
+            }
+        elif self.normalized_realtime_provider == "azure_voice_live":
+            checks = {
+                "AZURE_REALTIME_API_KEY": self.azure_realtime_api_key,
+                "AZURE_VOICE_LIVE_ENDPOINT": self.azure_voice_live_endpoint,
+                "AZURE_VOICE_LIVE_MODEL": self.azure_voice_live_model,
+            }
+        else:
+            return ["REALTIME_PROVIDER"]
+        return [name for name, value in checks.items() if not value]
+
+    def realtime_warnings(self) -> list[str]:
+        warnings: list[str] = []
+        if self.realtime_provider.strip().lower() != self.normalized_realtime_provider:
+            warnings.append("REALTIME_PROVIDER is invalid; realtime voice is disabled.")
+        if not self.enable_realtime_voice:
+            return warnings
+        if self.normalized_realtime_provider == "none":
+            warnings.append("ENABLE_REALTIME_VOICE is true but REALTIME_PROVIDER is none.")
+        missing = self.missing_realtime_variables()
+        if missing:
+            warnings.append(f"Realtime provider is not configured; missing: {', '.join(missing)}.")
+        return warnings
 
     @property
     def cosmos_configured(self) -> bool:

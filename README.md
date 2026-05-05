@@ -282,6 +282,89 @@ call.closed
 
 Logs must not include raw audio payloads, Azure Speech keys, Azure OpenAI keys, Twilio auth tokens, or other secrets.
 
+## Experimental Azure Realtime Voice
+
+Narayana includes an experimental realtime provider spike for comparing Azure realtime voice latency against the current turn-based path:
+
+```text
+Twilio audio -> VAD/turn -> Azure Speech STT -> intake/model -> Azure Speech TTS -> Twilio audio
+```
+
+The realtime path is disabled by default and the current STT/TTS path remains the fallback.
+
+Default safe settings:
+
+```dotenv
+ENABLE_REALTIME_VOICE=false
+REALTIME_PROVIDER=none
+AZURE_REALTIME_ENDPOINT=
+AZURE_REALTIME_API_KEY=
+AZURE_REALTIME_DEPLOYMENT=
+AZURE_REALTIME_API_VERSION=
+AZURE_VOICE_LIVE_ENDPOINT=
+AZURE_VOICE_LIVE_MODEL=
+```
+
+Supported experimental provider values:
+
+```dotenv
+REALTIME_PROVIDER=none
+REALTIME_PROVIDER=azure_openai_realtime
+REALTIME_PROVIDER=azure_voice_live
+```
+
+Azure OpenAI GPT Realtime manual test settings:
+
+```powershell
+$env:ENABLE_REALTIME_VOICE="true"
+$env:REALTIME_PROVIDER="azure_openai_realtime"
+$env:AZURE_REALTIME_ENDPOINT="https://<resource>.openai.azure.com"
+$env:AZURE_REALTIME_API_KEY="<secret>"
+$env:AZURE_REALTIME_DEPLOYMENT="<gpt-realtime-deployment>"
+$env:AZURE_REALTIME_API_VERSION="2025-04-01-preview"
+```
+
+Azure Voice Live manual test settings:
+
+```powershell
+$env:ENABLE_REALTIME_VOICE="true"
+$env:REALTIME_PROVIDER="azure_voice_live"
+$env:AZURE_REALTIME_API_KEY="<secret>"
+$env:AZURE_VOICE_LIVE_ENDPOINT="wss://<resource>.services.ai.azure.com/voice-live/realtime?api-version=2025-10-01"
+$env:AZURE_VOICE_LIVE_MODEL="gpt-realtime"
+```
+
+Region and deployment warning:
+
+- Azure OpenAI GPT Realtime requires an eligible realtime model deployment in a supported Azure region. Microsoft documentation has described supported realtime regions including East US 2 and Sweden Central; verify current model availability before the demo.
+- Do not assume the Narayana backend region has realtime model capacity.
+- If no realtime deployment exists, keep `ENABLE_REALTIME_VOICE=false`.
+
+When enabled and configured, the Twilio WebSocket tries the selected realtime provider after the Twilio `start` event. Provider audio output is streamed back as Twilio media events. If realtime configuration, connection, send, receive, or output normalization fails, Narayana logs fallback and returns to the current turn-based pipeline.
+
+Useful realtime log names:
+
+```text
+realtime.connected
+realtime.audio.input.sent
+realtime.audio.output.received
+realtime.response.started
+realtime.response.completed
+realtime.error
+realtime.fallback
+```
+
+Health output includes:
+
+- `enable_realtime_voice`
+- `realtime_provider`
+- `azure_realtime_configured`
+- `azure_openai_realtime_configured`
+- `azure_voice_live_realtime_configured`
+- `realtime_warnings`
+
+Realtime logs and audit metadata must not include API keys, authorization headers, or raw audio payloads.
+
 ## Optional Twilio TTS Speak-Back
 
 Twilio speak-back lets Narayana read `response_text` back to a caller over the same Twilio Media Stream. It is for controlled demos only and is disabled by default to avoid surprise Azure Speech usage cost.

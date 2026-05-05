@@ -119,5 +119,11 @@ class AzureHealth(BaseModel):
     azure_speech_voice: str = "th-TH-PremwadeeNeural"
     tts_use_ssml: bool = True
     tts_output_format: str = "mulaw_8khz"
+    enable_realtime_voice: bool = False
+    realtime_provider: str = "none"
+    azure_realtime_configured: bool = False
+    azure_openai_realtime_configured: bool = False
+    azure_voice_live_realtime_configured: bool = False
+    realtime_warnings: list[str] = Field(default_factory=list)
     missing_variables: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

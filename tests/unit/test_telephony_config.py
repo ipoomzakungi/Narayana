@@ -58,6 +58,14 @@ def test_telephony_defaults_keep_local_mic_and_no_provider() -> None:
     assert settings.twilio_configured is False
     assert settings.acs_configured is False
     assert settings.azure_speech_tts_configured is False
+    assert settings.enable_realtime_voice is False
+    assert settings.realtime_provider == "none"
+    assert settings.normalized_realtime_provider == "none"
+    assert settings.realtime_configured is False
+    assert settings.azure_openai_realtime_configured is False
+    assert settings.azure_voice_live_realtime_configured is False
+    assert settings.missing_realtime_variables() == []
+    assert settings.realtime_warnings() == []
 
 
 def test_twilio_configured_requires_only_public_base_url_for_webhook() -> None:
@@ -120,6 +128,12 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     monkeypatch.setenv("CALL_AUDIT_LOG_TRANSCRIPTS", "false")
     monkeypatch.setenv("CALL_AUDIT_MAX_SESSIONS", "12")
     monkeypatch.setenv("TWILIO_FORCE_HANGUP_ENABLED", "true")
+    monkeypatch.setenv("ENABLE_REALTIME_VOICE", "true")
+    monkeypatch.setenv("REALTIME_PROVIDER", "azure_openai_realtime")
+    monkeypatch.setenv("AZURE_REALTIME_ENDPOINT", "https://aoai.example.openai.azure.com")
+    monkeypatch.setenv("AZURE_REALTIME_API_KEY", "realtime-key")
+    monkeypatch.setenv("AZURE_REALTIME_DEPLOYMENT", "gpt-realtime")
+    monkeypatch.setenv("AZURE_REALTIME_API_VERSION", "2025-04-01-preview")
     reset_settings_cache()
 
     settings = Settings.from_env()
@@ -158,6 +172,10 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     assert settings.call_audit_log_transcripts is False
     assert settings.call_audit_max_sessions == 12
     assert settings.twilio_force_hangup_enabled is True
+    assert settings.enable_realtime_voice is True
+    assert settings.normalized_realtime_provider == "azure_openai_realtime"
+    assert settings.azure_openai_realtime_configured is True
+    assert settings.realtime_configured is True
     assert settings.azure_speech_tts_configured is False
     assert settings.missing_azure_speech_tts_variables() == ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"]
     reset_settings_cache()

@@ -56,6 +56,12 @@ async def azure_health(settings: Settings = Depends(get_settings)) -> AzureHealt
         azure_speech_voice=settings.azure_speech_voice,
         tts_use_ssml=settings.tts_use_ssml,
         tts_output_format=settings.tts_output_format,
+        enable_realtime_voice=settings.enable_realtime_voice,
+        realtime_provider=settings.normalized_realtime_provider,
+        azure_realtime_configured=settings.realtime_configured,
+        azure_openai_realtime_configured=settings.azure_openai_realtime_configured,
+        azure_voice_live_realtime_configured=settings.azure_voice_live_realtime_configured,
+        realtime_warnings=settings.realtime_warnings(),
         missing_variables=settings.missing_azure_variables(),
         warnings=warnings,
     )

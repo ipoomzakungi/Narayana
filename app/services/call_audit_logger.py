@@ -73,6 +73,37 @@ def append_audit_event(
     )
 
 
+def append_realtime_audit_event(
+    store: IntakeSessionStore,
+    settings: Settings,
+    session_id: str,
+    *,
+    event_type: str,
+    provider: str,
+    call_id: str | None = None,
+    latency_ms: int | None = None,
+    warnings: list[str] | None = None,
+    fallback_reason: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    safe = {
+        "provider": provider,
+        "call_id": call_id,
+        "latency_ms": latency_ms,
+        "warnings": warnings or [],
+        "fallback_reason": fallback_reason,
+        **(metadata or {}),
+    }
+    append_audit_event(
+        store,
+        settings,
+        session_id,
+        event_type=event_type,
+        guardrail_warnings=warnings,
+        metadata=safe,
+    )
+
+
 def _redact_value(key: str, value: Any) -> Any:
     normalized_key = key.lower()
     if any(part in normalized_key for part in SENSITIVE_KEY_PARTS):

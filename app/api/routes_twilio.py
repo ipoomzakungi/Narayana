@@ -12,14 +12,21 @@ from fastapi.responses import Response
 from app.core.config import get_settings
 from app.models.audio import VadState
 from app.models.intake import ConversationSpeaker
+from app.models.realtime import RealtimeAudioEvent, RealtimeAudioEventType
 from app.models.telephony import CallMetadata, TelephonyCodec, TelephonyProvider, VoiceInputMode
 from app.models.triage import ProviderMode
 from app.models.tts import TTSProfile
 from app.services.audio_session_processor import AudioSessionProcessor
 from app.services.azure_speech_tts_service import AzureSpeechTTSService
-from app.services.call_audit_logger import append_audit_event, log_call_event
+from app.services.call_audit_logger import append_audit_event, append_realtime_audit_event, log_call_event
 from app.services.call_lifecycle_service import CallLifecycleService, CallLifecycleState
 from app.services.intake_session_store import get_intake_session_store
+from app.services.realtime_voice_provider import (
+    RealtimeProviderSelection,
+    RealtimeVoiceProvider,
+    build_realtime_instructions,
+    get_realtime_provider,
+)
 from app.services.twilio_audio_service import (
     TwilioMediaError,
     build_twilio_clear_event,
@@ -145,6 +152,224 @@ def _with_tts_debug_metadata(payload: dict, settings, stream_sid: str | None) ->
         "stream_sid_present": bool(stream_sid),
     }
     return updated
+
+
+def _realtime_debug_payload(selection: RealtimeProviderSelection) -> dict:
+    return selection.debug_payload()
+
+
+def _realtime_event_payload(
+    event_type: str,
+    *,
+    session_id: str,
+    call_id: str,
+    provider: str,
+    latency_ms: int | None = None,
+    warnings: list[str] | None = None,
+    fallback_reason: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    return {
+        "type": f"realtime.{event_type}",
+        "session_id": session_id,
+        "call_id": call_id,
+        "provider": provider,
+        "latency_ms": latency_ms,
+        "warnings": warnings or [],
+        "fallback_reason": fallback_reason,
+        "metadata": metadata or {},
+    }
+
+
+def _log_realtime(
+    *,
+    settings,
+    event_type: str,
+    session_id: str,
+    call_id: str,
+    provider: str,
+    latency_ms: int | None = None,
+    warnings: list[str] | None = None,
+    fallback_reason: str | None = None,
+    metadata: dict | None = None,
+) -> None:
+    event_name = f"realtime.{event_type}"
+    event_metadata = {
+        "provider": provider,
+        "latency_ms": latency_ms,
+        "warnings": warnings or [],
+        "fallback_reason": fallback_reason,
+        **(metadata or {}),
+    }
+    log_call_event(logger, event_name, session_id=session_id, call_id=call_id, metadata=event_metadata)
+    append_realtime_audit_event(
+        get_intake_session_store(settings.assistant_max_followups),
+        settings,
+        session_id,
+        event_type=event_name,
+        provider=provider,
+        call_id=call_id,
+        latency_ms=latency_ms,
+        warnings=warnings,
+        fallback_reason=fallback_reason,
+        metadata=metadata,
+    )
+
+
+async def _send_realtime_fallback(
+    websocket: WebSocket,
+    *,
+    settings,
+    session_id: str,
+    call_id: str,
+    provider: str,
+    reason: str,
+    warnings: list[str] | None = None,
+    latency_ms: int | None = None,
+) -> None:
+    _log_realtime(
+        settings=settings,
+        event_type="fallback",
+        session_id=session_id,
+        call_id=call_id,
+        provider=provider,
+        latency_ms=latency_ms,
+        warnings=warnings,
+        fallback_reason=reason,
+    )
+    await websocket.send_json(
+        _realtime_event_payload(
+            "fallback",
+            session_id=session_id,
+            call_id=call_id,
+            provider=provider,
+            latency_ms=latency_ms,
+            warnings=warnings,
+            fallback_reason=reason,
+        )
+    )
+
+
+async def _drain_realtime_events(
+    websocket: WebSocket,
+    *,
+    settings,
+    provider: RealtimeVoiceProvider,
+    stream_sid: str | None,
+    session_id: str,
+    call_id: str,
+    max_events: int = 8,
+) -> bool:
+    for _ in range(max_events):
+        try:
+            event = await asyncio.wait_for(provider.receive_audio_event(), timeout=0.001)
+        except asyncio.TimeoutError:
+            return False
+        except Exception as exc:
+            _log_realtime(
+                settings=settings,
+                event_type="error",
+                session_id=session_id,
+                call_id=call_id,
+                provider=provider.mode.value,
+                warnings=[f"Realtime provider receive failed: {exc}"],
+                fallback_reason="provider_error",
+            )
+            await _send_realtime_fallback(
+                websocket,
+                settings=settings,
+                session_id=session_id,
+                call_id=call_id,
+                provider=provider.mode.value,
+                reason="provider_error",
+                warnings=[f"Realtime provider receive failed: {exc}"],
+            )
+            return True
+        if event is None:
+            return False
+        fallback = await _handle_realtime_event(
+            websocket,
+            settings=settings,
+            event=event,
+            stream_sid=stream_sid,
+            session_id=session_id,
+            call_id=call_id,
+        )
+        if fallback:
+            return True
+    return False
+
+
+async def _handle_realtime_event(
+    websocket: WebSocket,
+    *,
+    settings,
+    event: RealtimeAudioEvent,
+    stream_sid: str | None,
+    session_id: str,
+    call_id: str,
+) -> bool:
+    provider = event.provider.value
+    if event.event_type == RealtimeAudioEventType.ERROR:
+        _log_realtime(
+            settings=settings,
+            event_type="error",
+            session_id=session_id,
+            call_id=call_id,
+            provider=provider,
+            latency_ms=event.latency_ms,
+            warnings=event.warnings,
+            fallback_reason=event.fallback_reason or "provider_error",
+            metadata=event.metadata,
+        )
+        await _send_realtime_fallback(
+            websocket,
+            settings=settings,
+            session_id=session_id,
+            call_id=call_id,
+            provider=provider,
+            reason=event.fallback_reason or "provider_error",
+            warnings=event.warnings,
+            latency_ms=event.latency_ms,
+        )
+        return True
+
+    event_type = event.event_type.value
+    _log_realtime(
+        settings=settings,
+        event_type=event_type,
+        session_id=session_id,
+        call_id=call_id,
+        provider=provider,
+        latency_ms=event.latency_ms,
+        warnings=event.warnings,
+        metadata=event.metadata,
+    )
+    await websocket.send_json(
+        _realtime_event_payload(
+            event_type,
+            session_id=session_id,
+            call_id=call_id,
+            provider=provider,
+            latency_ms=event.latency_ms,
+            warnings=event.warnings,
+            metadata=event.metadata,
+        )
+    )
+    if event.event_type == RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED and event.audio_base64:
+        if not stream_sid:
+            await _send_realtime_fallback(
+                websocket,
+                settings=settings,
+                session_id=session_id,
+                call_id=call_id,
+                provider=provider,
+                reason="missing_twilio_streamSid",
+                warnings=["Realtime output could not be sent because Twilio streamSid is missing."],
+            )
+            return True
+        await websocket.send_json(build_twilio_media_event(stream_sid, event.audio_base64))
+    return False
 
 
 async def _maybe_send_tts_response(
@@ -503,6 +728,9 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
     initial_greeting_attempted = False
     lifecycle_service = CallLifecycleService(settings)
     lifecycle_state = CallLifecycleState(session_id=session_id, call_id=call_id)
+    realtime_selection = get_realtime_provider(settings)
+    realtime_provider: RealtimeVoiceProvider | None = None
+    realtime_active = False
     processor = AudioSessionProcessor(
         settings=settings,
         session_id=session_id,
@@ -557,8 +785,59 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         "state": VadState.LISTENING.value,
                         "source_input_mode": VoiceInputMode.TWILIO_CALL.value,
                         "call_metadata": metadata.model_dump(mode="json"),
+                        "realtime": _realtime_debug_payload(realtime_selection),
                     }
                 )
+                realtime_selection = get_realtime_provider(settings)
+                if realtime_selection.active_candidate and realtime_selection.provider is not None:
+                    connection = await realtime_selection.provider.connect(
+                        session_id=session_id,
+                        call_id=call_id,
+                        instructions=build_realtime_instructions(settings),
+                    )
+                    if connection.connected:
+                        realtime_provider = realtime_selection.provider
+                        realtime_active = True
+                        _log_realtime(
+                            settings=settings,
+                            event_type="connected",
+                            session_id=session_id,
+                            call_id=call_id,
+                            provider=connection.provider.value,
+                            latency_ms=connection.latency_ms,
+                            warnings=connection.warnings,
+                        )
+                        await websocket.send_json(
+                            _realtime_event_payload(
+                                "connected",
+                                session_id=session_id,
+                                call_id=call_id,
+                                provider=connection.provider.value,
+                                latency_ms=connection.latency_ms,
+                                warnings=connection.warnings,
+                            )
+                        )
+                    else:
+                        await _send_realtime_fallback(
+                            websocket,
+                            settings=settings,
+                            session_id=session_id,
+                            call_id=call_id,
+                            provider=connection.provider.value,
+                            reason=connection.fallback_reason or "connect_failed",
+                            warnings=connection.warnings,
+                            latency_ms=connection.latency_ms,
+                        )
+                elif realtime_selection.enabled:
+                    await _send_realtime_fallback(
+                        websocket,
+                        settings=settings,
+                        session_id=session_id,
+                        call_id=call_id,
+                        provider=realtime_selection.provider_mode.value,
+                        reason=realtime_selection.fallback_reason or "not_configured",
+                        warnings=realtime_selection.warnings,
+                    )
                 if not initial_greeting_attempted:
                     initial_greeting_attempted = True
                     await _send_initial_greeting(
@@ -639,6 +918,54 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                 except TwilioMediaError as exc:
                     await websocket.send_json({"type": "error", "detail": str(exc)})
                     continue
+                if realtime_active and realtime_provider is not None:
+                    send_result = await realtime_provider.send_audio_frame(frame)
+                    if send_result.sent:
+                        _log_realtime(
+                            settings=settings,
+                            event_type="audio.input.sent",
+                            session_id=session_id,
+                            call_id=call_id,
+                            provider=send_result.provider.value,
+                            latency_ms=send_result.latency_ms,
+                            warnings=send_result.warnings,
+                            metadata={"sequence": frame.sequence},
+                        )
+                        await websocket.send_json(
+                            _realtime_event_payload(
+                                "audio.input.sent",
+                                session_id=session_id,
+                                call_id=call_id,
+                                provider=send_result.provider.value,
+                                latency_ms=send_result.latency_ms,
+                                warnings=send_result.warnings,
+                                metadata={"sequence": frame.sequence},
+                            )
+                        )
+                        fallback_to_current = await _drain_realtime_events(
+                            websocket,
+                            settings=settings,
+                            provider=realtime_provider,
+                            stream_sid=stream_sid,
+                            session_id=session_id,
+                            call_id=call_id,
+                        )
+                        if not fallback_to_current:
+                            continue
+                    else:
+                        await _send_realtime_fallback(
+                            websocket,
+                            settings=settings,
+                            session_id=session_id,
+                            call_id=call_id,
+                            provider=send_result.provider.value,
+                            reason=send_result.fallback_reason or "stream_failed",
+                            warnings=send_result.warnings,
+                            latency_ms=send_result.latency_ms,
+                        )
+                    realtime_active = False
+                    await realtime_provider.close()
+                    realtime_provider = None
                 processed_payloads = await processor.process_frame(frame)
                 if any(
                     payload.get("type") == "debug.event"
@@ -674,10 +1001,14 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
 
             if event == "stop":
                 log_call_event(logger, "call.closed", session_id=session_id, call_id=call_id, metadata={"reason": "twilio_stop"})
+                if realtime_provider is not None:
+                    await realtime_provider.close()
                 await websocket.send_json({"type": "session.closed", "session_id": session_id})
                 await websocket.close()
                 return
 
             await websocket.send_json({"type": "error", "detail": f"Unsupported Twilio event: {event}"})
     except WebSocketDisconnect:
+        if realtime_provider is not None:
+            await realtime_provider.close()
         return
