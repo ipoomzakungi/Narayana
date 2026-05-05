@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings
 from app.main import create_app
 from app.services.call_lifecycle_service import CallLifecycleService, CallLifecycleState
+from app.models.realtime import RealtimeAudioEvent, RealtimeAudioEventType, RealtimeAudioFormat, RealtimeProviderMode
 from app.models.tts import TTSProfile, TTSResult
 
 
@@ -358,3 +359,63 @@ def test_twilio_mark_event_reports_playback_completed(monkeypatch) -> None:
 
     assert completed["type"] == "assistant.playback.completed"
     assert completed["mark_name"] == "narayana_initial_greeting"
+
+
+@pytest.mark.asyncio
+async def test_handle_realtime_event_sends_debug_payload_and_twilio_media(caplog) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    websocket = FakeWebSocket()
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        audio_base64="abcd",
+        audio_format=RealtimeAudioFormat.MULAW_8KHZ,
+        latency_ms=42,
+    )
+
+    with caplog.at_level("INFO", logger="app.api.routes_twilio"):
+        fallback = await routes_twilio._handle_realtime_event(
+            websocket,
+            settings=Settings(call_audit_enabled=True),
+            event=event,
+            stream_sid="MZ123",
+            session_id="twilio_CA123",
+            call_id="CA123",
+        )
+
+    assert fallback is False
+    assert websocket.sent[0]["type"] == "realtime.audio.output.received"
+    assert websocket.sent[0]["latency_ms"] == 42
+    assert websocket.sent[1] == {"event": "media", "streamSid": "MZ123", "media": {"payload": "abcd"}}
+    assert "realtime.audio.output.received" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_handle_realtime_error_sends_fallback_and_logs(caplog) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    websocket = FakeWebSocket()
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.ERROR,
+        provider=RealtimeProviderMode.AZURE_VOICE_LIVE,
+        fallback_reason="provider_error",
+        warnings=["provider failed"],
+        latency_ms=9,
+    )
+
+    with caplog.at_level("INFO", logger="app.api.routes_twilio"):
+        fallback = await routes_twilio._handle_realtime_event(
+            websocket,
+            settings=Settings(call_audit_enabled=True),
+            event=event,
+            stream_sid="MZ123",
+            session_id="twilio_CA123",
+            call_id="CA123",
+        )
+
+    assert fallback is True
+    assert websocket.sent[0]["type"] == "realtime.fallback"
+    assert websocket.sent[0]["fallback_reason"] == "provider_error"
+    assert "realtime.error" in caplog.text
+    assert "realtime.fallback" in caplog.text

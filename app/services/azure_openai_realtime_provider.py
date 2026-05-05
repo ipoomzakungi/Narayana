@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+from app.core.config import Settings
+from app.models.audio import AudioFrame
+from app.models.realtime import (
+    RealtimeAudioEvent,
+    RealtimeAudioEventType,
+    RealtimeAudioFormat,
+    RealtimeConnectionResult,
+    RealtimeProviderMode,
+    RealtimeSendResult,
+)
+from app.services.realtime_voice_provider import (
+    BaseRealtimeProvider,
+    WebSocketFactory,
+    auth_headers,
+    build_openai_realtime_uri,
+)
+
+
+class AzureOpenAIRealtimeProvider(BaseRealtimeProvider):
+    mode = RealtimeProviderMode.AZURE_OPENAI_REALTIME
+
+    def __init__(self, settings: Settings, websocket_factory: WebSocketFactory | None = None) -> None:
+        super().__init__(settings, websocket_factory)
+
+    async def connect(self, *, session_id: str, call_id: str | None, instructions: str) -> RealtimeConnectionResult:
+        self.session_id = session_id
+        self.call_id = call_id
+        tracker = self._tracker(session_id, call_id)
+        tracker.start("connect")
+        try:
+            self.websocket = await self._open_websocket(build_openai_realtime_uri(self.settings), auth_headers(self.settings))
+            await self._send_json(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "instructions": instructions,
+                        "modalities": ["audio", "text"],
+                        "input_audio_format": "pcm16",
+                        "output_audio_format": "g711_ulaw",
+                        "turn_detection": {"type": "server_vad"},
+                    },
+                }
+            )
+        except Exception as exc:
+            await self.close()
+            sample = tracker.sample("connect", metadata={"reason": "connect_failed"})
+            return RealtimeConnectionResult(
+                connected=False,
+                provider=self.mode,
+                fallback_reason="connect_failed",
+                warnings=[f"Azure OpenAI Realtime connection failed: {exc}"],
+                latency_ms=sample.latency_ms or 0,
+            )
+        sample = tracker.sample("connect")
+        return RealtimeConnectionResult(connected=True, provider=self.mode, latency_ms=sample.latency_ms or 0)
+
+    async def send_audio_frame(self, frame: AudioFrame) -> RealtimeSendResult:
+        tracker = self._tracker(frame.session_id, self.call_id)
+        tracker.start("input_audio_sent")
+        try:
+            await self._send_json({"type": "input_audio_buffer.append", "audio": frame.audio_base64})
+        except Exception as exc:
+            sample = tracker.sample("input_audio_sent", metadata={"sequence": frame.sequence, "reason": "stream_failed"})
+            return RealtimeSendResult(
+                sent=False,
+                provider=self.mode,
+                fallback_reason="stream_failed",
+                warnings=[f"Azure OpenAI Realtime audio send failed: {exc}"],
+                latency_ms=sample.latency_ms or 0,
+            )
+        sample = tracker.sample("input_audio_sent", metadata={"sequence": frame.sequence})
+        return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=sample.latency_ms or 0)
+
+    async def receive_audio_event(self) -> RealtimeAudioEvent | None:
+        try:
+            message = await self._recv_json()
+        except Exception as exc:
+            return self._event(
+                RealtimeAudioEventType.ERROR,
+                fallback_reason="provider_error",
+                warnings=[f"Azure OpenAI Realtime receive failed: {exc}"],
+            )
+        return self._normalize_message(message)
+
+    def _normalize_message(self, message: dict) -> RealtimeAudioEvent | None:
+        event_type = str(message.get("type") or "")
+        if event_type in {"response.created", "response.started"}:
+            return self._event(
+                RealtimeAudioEventType.RESPONSE_STARTED,
+                metadata={"provider_event_type": event_type},
+            )
+        if event_type in {"response.done", "response.completed"}:
+            return self._event(
+                RealtimeAudioEventType.RESPONSE_COMPLETED,
+                metadata={"provider_event_type": event_type},
+            )
+        if event_type in {"response.audio.delta", "response.output_audio.delta"}:
+            audio = message.get("delta") or message.get("audio")
+            if not isinstance(audio, str) or not audio:
+                return self._event(
+                    RealtimeAudioEventType.ERROR,
+                    fallback_reason="provider_error",
+                    warnings=["Azure OpenAI Realtime audio delta was empty."],
+                    metadata={"provider_event_type": event_type},
+                )
+            return self._event(
+                RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED,
+                audio_base64=audio,
+                audio_format=RealtimeAudioFormat.MULAW_8KHZ,
+                metadata={"provider_event_type": event_type},
+            )
+        if event_type == "error":
+            error = message.get("error") if isinstance(message.get("error"), dict) else {}
+            return self._event(
+                RealtimeAudioEventType.ERROR,
+                fallback_reason="provider_error",
+                warnings=[str(error.get("message") or "Azure OpenAI Realtime returned an error.")],
+                metadata={"provider_event_type": event_type},
+            )
+        return None

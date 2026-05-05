@@ -7,8 +7,10 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
+from app.models.realtime import RealtimeAudioEvent, RealtimeAudioEventType, RealtimeAudioFormat, RealtimeProviderMode
 from app.models.tts import TTSResult
 from app.models.triage import IncidentType, ProviderMode, TriageLevel, TriageResult
+from app.services.realtime_voice_provider import RealtimeProviderSelection
 from app.services.voice_agent_provider import VoiceProviderResult
 
 audioop = pytest.importorskip("audioop")
@@ -219,8 +221,146 @@ def test_twilio_start_does_not_send_initial_greeting_by_default(monkeypatch) -> 
                 },
             }
         )
-        assert websocket.receive_json()["type"] == "session.started"
+        started = websocket.receive_json()
+        assert started["type"] == "session.started"
+        assert started["realtime"]["enabled"] is False
+        assert started["realtime"]["provider"] == "none"
         close_twilio_ws(websocket)
+
+
+def test_twilio_media_flow_remains_current_pipeline_when_realtime_disabled(tmp_path, monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    monkeypatch.setattr(
+        routes_twilio,
+        "get_settings",
+        lambda: Settings(
+            use_mock_services=True,
+            enable_realtime_voice=False,
+            case_store_path=str(tmp_path / "cases.json"),
+            audio_store_path=str(tmp_path / "audio"),
+        ),
+    )
+    client = TestClient(create_app())
+
+    with client.websocket_connect("/ws/telephony/twilio/CA_NO_REALTIME") as websocket:
+        websocket.send_json(
+            {
+                "event": "start",
+                "sequenceNumber": "1",
+                "start": {
+                    "callSid": "CA_NO_REALTIME",
+                    "streamSid": "MZ_NO_REALTIME",
+                    "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
+                },
+            }
+        )
+        started = websocket.receive_json()
+        assert started["realtime"]["enabled"] is False
+        send_committable_turn(websocket)
+
+        messages = []
+        for _ in range(100):
+            message = websocket.receive_json()
+            messages.append(message)
+            if message.get("type") == "triage.case.created":
+                break
+        close_twilio_ws(websocket)
+
+    assert any(message.get("type") == "triage.case.created" for message in messages)
+    assert not any(str(message.get("type", "")).startswith("realtime.") for message in messages)
+
+
+def test_twilio_realtime_mocked_provider_streams_audio_output(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    class FakeRealtimeProvider:
+        mode = RealtimeProviderMode.AZURE_OPENAI_REALTIME
+
+        def __init__(self) -> None:
+            self.events = [
+                RealtimeAudioEvent(
+                    event_type=RealtimeAudioEventType.RESPONSE_STARTED,
+                    provider=self.mode,
+                    latency_ms=7,
+                ),
+                RealtimeAudioEvent(
+                    event_type=RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED,
+                    provider=self.mode,
+                    audio_base64="abcd",
+                    audio_format=RealtimeAudioFormat.MULAW_8KHZ,
+                    latency_ms=11,
+                ),
+                RealtimeAudioEvent(
+                    event_type=RealtimeAudioEventType.RESPONSE_COMPLETED,
+                    provider=self.mode,
+                    latency_ms=18,
+                ),
+            ]
+
+        async def connect(self, *, session_id: str, call_id: str | None, instructions: str):
+            from app.models.realtime import RealtimeConnectionResult
+
+            return RealtimeConnectionResult(connected=True, provider=self.mode, latency_ms=5)
+
+        async def send_audio_frame(self, frame):
+            from app.models.realtime import RealtimeSendResult
+
+            return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=3)
+
+        async def receive_audio_event(self):
+            return self.events.pop(0) if self.events else None
+
+        async def close(self):
+            return None
+
+    fake_provider = FakeRealtimeProvider()
+    monkeypatch.setattr(
+        routes_twilio,
+        "get_settings",
+        lambda: Settings(
+            use_mock_services=True,
+            enable_realtime_voice=True,
+            realtime_provider="azure_openai_realtime",
+            azure_realtime_endpoint="https://aoai.example.openai.azure.com",
+            azure_realtime_api_key="key",
+            azure_realtime_deployment="gpt-realtime",
+            azure_realtime_api_version="2025-04-01-preview",
+        ),
+    )
+    monkeypatch.setattr(
+        routes_twilio,
+        "get_realtime_provider",
+        lambda settings: RealtimeProviderSelection(
+            enabled=True,
+            provider_mode=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+            provider=fake_provider,
+            configured=True,
+        ),
+    )
+    client = TestClient(create_app())
+
+    with client.websocket_connect("/ws/telephony/twilio/CA_REALTIME") as websocket:
+        websocket.send_json(
+            {
+                "event": "start",
+                "sequenceNumber": "1",
+                "start": {
+                    "callSid": "CA_REALTIME",
+                    "streamSid": "MZ_REALTIME",
+                    "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
+                },
+            }
+        )
+        websocket.send_json(media(2, 24000))
+        messages = [websocket.receive_json() for _ in range(6)]
+        close_twilio_ws(websocket)
+
+    assert messages[0]["type"] == "session.started"
+    assert any(message.get("type") == "realtime.connected" for message in messages)
+    assert any(message.get("type") == "realtime.audio.input.sent" for message in messages)
+    assert any(message.get("type") == "realtime.audio.output.received" for message in messages)
+    assert any(message == {"event": "media", "streamSid": "MZ_REALTIME", "media": {"payload": "abcd"}} for message in messages)
 
 
 def test_twilio_start_sends_initial_greeting_media_and_mark(monkeypatch) -> None:
