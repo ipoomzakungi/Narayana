@@ -174,7 +174,7 @@ Emergency content always overrides off-topic handling. Phrases such as `ช่�
 Twilio no-reply handling is also optional and uses the existing TTS media sender. It is active only when initial greeting or Twilio TTS speak-back is enabled:
 
 ```dotenv
-CALL_NO_REPLY_SECONDS=10
+CALL_NO_REPLY_SECONDS=15
 CALL_NO_REPLY_PROMPT_SECONDS=15
 CALL_MAX_NO_REPLY_PROMPTS=2
 CALL_END_ON_NO_REPLY=true
@@ -193,7 +193,94 @@ Final no-reply close:
 หากไม่มีการตอบกลับ ระบบจะสิ้นสุดสายนี้นะคะ
 ```
 
-Watch logs for `scope.off_topic`, `scope.emergency_override`, `call.no_reply_prompt`, and `call.no_reply_close`. The `/voice-debug` console shows `off_topic_count`, `redirect_count`, `no_reply_prompt_count`, `call_end_recommended`, `call_end_reason`, `last_assistant_redirect`, and guardrail warnings. No ACS, No SMS, no emergency dispatch, and no automatic closure/rejection of real emergency cases are implemented.
+Watch logs for `scope.off_topic`, `scope.emergency_override`, `no_reply.prompt`, and `call.closed`. The `/voice-debug` console shows `off_topic_count`, `redirect_count`, `no_reply_prompt_count`, `call_end_recommended`, `call_end_reason`, `last_assistant_redirect`, and guardrail warnings. No ACS, No SMS, no emergency dispatch, and no automatic closure/rejection of real emergency cases are implemented.
+
+## Demo Latency, Barge-In, and Call Audit
+
+For live demos, keep the Azure Container App warm so the first call does not pay an inactivity cold start:
+
+```powershell
+az containerapp update `
+  --name narayana-api `
+  --resource-group rg-narayana-demo `
+  --min-replicas 1 `
+  --max-replicas 1
+```
+
+Return to lower-cost mode after the demo:
+
+```powershell
+az containerapp update `
+  --name narayana-api `
+  --resource-group rg-narayana-demo `
+  --min-replicas 0 `
+  --max-replicas 1
+```
+
+With `min-replicas 0`, the next call after inactivity can cold start.
+
+Demo turn timing can be tuned without code changes:
+
+```dotenv
+TURN_SILENCE_THRESHOLD_MS=500
+TURN_PRE_SPEECH_PADDING_MS=200
+VAD_ENERGY_THRESHOLD=0.015
+MIN_SPEECH_MS=300
+CALL_NO_REPLY_SECONDS=15
+CALL_NO_REPLY_PROMPT_SECONDS=15
+CALL_MAX_NO_REPLY_PROMPTS=2
+CALL_AUDIT_ENABLED=true
+CALL_AUDIT_LOG_TRANSCRIPTS=true
+CALL_AUDIT_MAX_SESSIONS=50
+```
+
+`MIN_SPEECH_MS` prevents very short line noise from becoming a committed caller turn. Lowering `TURN_SILENCE_THRESHOLD_MS` makes the demo respond faster after the caller stops speaking.
+
+Twilio barge-in is supported while Narayana audio is active. When caller speech is detected during assistant playback, the backend sends:
+
+```json
+{"event":"clear","streamSid":"<streamSid>"}
+```
+
+This clears Twilio buffered audio, records `barge_in.detected` and `barge_in.clear_sent`, and continues listening to the caller. Audio that has already played cannot be recalled, but unsent chunks are stopped when possible.
+
+Twilio mark events are tracked for playback completion. No-reply timers do not run while assistant audio is active; they start after the greeting or follow-up mark is received, or after a logged fallback completion timeout if Twilio does not return a mark.
+
+Call audit endpoints:
+
+```text
+GET /api/intake/sessions?limit=50
+GET /api/intake/sessions/{session_id}
+GET /api/intake/calls/{call_id}
+```
+
+The frontend audit page is:
+
+```text
+/call-audit
+```
+
+It shows recent sessions, caller turns, assistant turns, TTS events, barge-in/no-reply events, guardrail warnings, case group, recommended team, triage level, and final case id when created.
+
+Useful Container App log event names:
+
+```text
+call.started
+greeting.started
+greeting.completed
+caller.turn.committed
+caller.turn.transcribed
+intake.followup
+assistant.response
+tts.started
+tts.completed
+barge_in.detected
+barge_in.clear_sent
+no_reply.prompt
+call.closed
+```
+
+Logs must not include raw audio payloads, Azure Speech keys, Azure OpenAI keys, Twilio auth tokens, or other secrets.
 
 ## Optional Twilio TTS Speak-Back
 

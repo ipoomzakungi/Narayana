@@ -45,6 +45,45 @@ async def test_intake_from_transcript_asks_followup_for_incomplete_flood(app_wit
 
 
 @pytest.mark.asyncio
+async def test_intake_sessions_audit_endpoints(app_with_tmp_store) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app_with_tmp_store), base_url="http://test") as client:
+        create_response = await client.post(
+            "/api/intake/from-transcript",
+            json={
+                "session_id": "audit-session",
+                "call_id": "CA_AUDIT",
+                "transcript": "น้ำท่วมอยู่ที่หาดใหญ่",
+                "language_hint": "th",
+                "source_input_mode": "twilio_call",
+            },
+        )
+        list_response = await client.get("/api/intake/sessions?limit=10")
+        session_response = await client.get("/api/intake/sessions/audit-session")
+        call_response = await client.get("/api/intake/calls/CA_AUDIT")
+
+    assert create_response.status_code == 200
+    assert list_response.status_code == 200
+    list_payload = list_response.json()
+    assert list_payload["count"] == 1
+    assert list_payload["sessions"][0]["session_id"] == "audit-session"
+    assert list_payload["sessions"][0]["timeline_events"]
+    assert session_response.status_code == 200
+    assert session_response.json()["call_id"] == "CA_AUDIT"
+    assert call_response.status_code == 200
+    assert call_response.json()["session_id"] == "audit-session"
+
+
+@pytest.mark.asyncio
+async def test_intake_session_audit_not_found(app_with_tmp_store) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app_with_tmp_store), base_url="http://test") as client:
+        session_response = await client.get("/api/intake/sessions/missing")
+        call_response = await client.get("/api/intake/calls/CA_MISSING")
+
+    assert session_response.status_code == 404
+    assert call_response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_intake_first_off_topic_redirect_contract(app_with_tmp_store) -> None:
     async with AsyncClient(transport=ASGITransport(app=app_with_tmp_store), base_url="http://test") as client:
         response = await client.post(

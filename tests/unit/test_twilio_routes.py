@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
+from app.services.call_lifecycle_service import CallLifecycleService, CallLifecycleState
 from app.models.tts import TTSProfile, TTSResult
 
 
@@ -263,3 +264,97 @@ def test_twilio_tts_profile_detects_red_and_unclear_payloads() -> None:
 
     assert routes_twilio._tts_profile_for_payload(red_payload) == "red"
     assert routes_twilio._tts_profile_for_payload(unclear_payload) == "unclear"
+
+
+@pytest.mark.asyncio
+async def test_handle_barge_in_sends_twilio_clear(monkeypatch, caplog) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    settings = Settings(call_audit_enabled=True)
+    lifecycle_service = CallLifecycleService(settings)
+    lifecycle_state = CallLifecycleState(session_id="twilio_CA123", call_id="CA123")
+    lifecycle_service.track_assistant_playback_started(
+        lifecycle_state,
+        mark_name="narayana_tts_test",
+        purpose="tts",
+        estimated_duration_ms=1000,
+    )
+    websocket = FakeWebSocket()
+
+    with caplog.at_level("INFO", logger="app.api.routes_twilio"):
+        await routes_twilio._handle_barge_in(
+            websocket,
+            settings=settings,
+            lifecycle_service=lifecycle_service,
+            lifecycle_state=lifecycle_state,
+            stream_sid="MZ123",
+            call_id="CA123",
+            session_id="twilio_CA123",
+            metadata={"sequence": 7},
+        )
+
+    assert websocket.sent == [{"event": "clear", "streamSid": "MZ123"}]
+    assert lifecycle_state.assistant_speaking is False
+    assert "barge_in.detected" in caplog.text
+    assert "barge_in.clear_sent" in caplog.text
+
+
+def test_twilio_mark_event_reports_playback_completed(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    class MockTTSService:
+        configured = True
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        def missing_variables(self):
+            return []
+
+        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None, profile="normal"):
+            return TTSResult(
+                configured=True,
+                voice="th-TH-PremwadeeNeural",
+                profile=profile,
+                total_bytes=160,
+                estimated_duration_ms=20,
+                sanitized_text=text,
+            ).with_payloads(["abcd"])
+
+    monkeypatch.setattr(
+        routes_twilio,
+        "get_settings",
+        lambda: Settings(
+            use_mock_services=True,
+            enable_twilio_initial_greeting=True,
+            azure_speech_key="key",
+            azure_speech_region="eastus",
+        ),
+    )
+    monkeypatch.setattr(routes_twilio, "AzureSpeechTTSService", MockTTSService)
+    client = TestClient(create_app())
+
+    with client.websocket_connect("/ws/telephony/twilio/CA123") as websocket:
+        websocket.send_json(
+            {
+                "event": "start",
+                "sequenceNumber": "1",
+                "start": {
+                    "callSid": "CA123",
+                    "streamSid": "MZ123",
+                    "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
+                },
+            }
+        )
+        assert websocket.receive_json()["type"] == "session.started"
+        assert websocket.receive_json()["event"] == "media"
+        mark = websocket.receive_json()
+        assert mark["event"] == "mark"
+        websocket.send_json({"event": "mark", "streamSid": "MZ123", "mark": {"name": "narayana_initial_greeting"}})
+        completed = websocket.receive_json()
+        close_twilio = {"event": "stop"}
+        websocket.send_json(close_twilio)
+        assert websocket.receive_json()["type"] == "session.closed"
+
+    assert completed["type"] == "assistant.playback.completed"
+    assert completed["mark_name"] == "narayana_initial_greeting"

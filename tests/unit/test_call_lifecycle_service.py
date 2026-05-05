@@ -23,6 +23,44 @@ def test_no_reply_prompt_after_greeting_threshold() -> None:
     assert state.no_reply_prompt_count == 1
 
 
+def test_no_reply_waits_while_assistant_playback_active() -> None:
+    service = CallLifecycleService(Settings(enable_twilio_initial_greeting=True, call_no_reply_seconds=1))
+    now = utc_now()
+    state = CallLifecycleState(session_id="twilio_CA1", call_id="CA1")
+    service.track_greeting_sent(state, now - timedelta(seconds=10))
+    service.track_assistant_playback_started(
+        state,
+        mark_name="narayana_initial_greeting",
+        purpose="greeting",
+        estimated_duration_ms=30_000,
+        when=now - timedelta(seconds=1),
+    )
+
+    assert service.should_prompt_no_reply(state, now) is False
+
+    assert service.track_assistant_playback_completed(state, mark_name="narayana_initial_greeting", when=now) is True
+    assert service.should_prompt_no_reply(state, now + timedelta(seconds=2)) is True
+
+
+def test_playback_fallback_completion_allows_no_reply_prompt() -> None:
+    service = CallLifecycleService(Settings(enable_twilio_initial_greeting=True, call_no_reply_seconds=0.01))
+    now = utc_now()
+    state = CallLifecycleState(session_id="twilio_CA1", call_id="CA1")
+    service.track_greeting_sent(state, now - timedelta(seconds=1))
+    service.track_assistant_playback_started(
+        state,
+        mark_name="narayana_initial_greeting",
+        purpose="greeting",
+        estimated_duration_ms=20,
+        when=now - timedelta(seconds=1),
+    )
+
+    fallback_time = now + timedelta(seconds=0.02)
+    assert service.should_prompt_no_reply(state, fallback_time) is False
+    assert state.assistant_speaking is False
+    assert service.should_prompt_no_reply(state, fallback_time + timedelta(seconds=0.02)) is True
+
+
 def test_no_reply_final_close_after_max_prompts() -> None:
     service = CallLifecycleService(
         Settings(enable_twilio_initial_greeting=True, call_no_reply_prompt_seconds=5, call_max_no_reply_prompts=2)

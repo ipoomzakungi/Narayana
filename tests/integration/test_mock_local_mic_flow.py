@@ -51,8 +51,9 @@ def test_mock_local_mic_flow_creates_case(tmp_path, monkeypatch) -> None:
         assert start_message["provider_mode"] == "mock"
         assert "source_input_mode" not in start_message
 
-        websocket.send_json(frame(1, 24000))
-        for sequence in range(2, 41):
+        for sequence in range(1, 17):
+            websocket.send_json(frame(sequence, 24000))
+        for sequence in range(17, 56):
             websocket.send_json(frame(sequence, 0))
 
         messages = []

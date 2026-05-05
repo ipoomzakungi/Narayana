@@ -20,10 +20,12 @@ class TurnManager:
         vad: EnergyVadService | None = None,
         silence_threshold_ms: int = 750,
         pre_speech_padding_ms: int = 200,
+        min_speech_ms: int = 0,
     ) -> None:
         self.vad = vad or EnergyVadService()
         self.silence_threshold_ms = silence_threshold_ms
         self.pre_speech_padding_ms = pre_speech_padding_ms
+        self.min_speech_ms = min_speech_ms
         self.state = VadState.LISTENING
         self._in_speech = False
         self._silence_ms = 0
@@ -83,6 +85,23 @@ class TurnManager:
 
         ended_at = datetime.now(timezone.utc)
         duration_ms = max(self._speech_ms, frame.duration_ms)
+        if self._speech_ms < self.min_speech_ms:
+            events.append(
+                AudioDebugEvent(
+                    session_id=frame.session_id,
+                    event_type=AudioDebugEventType.VAD_SPEECH_END,
+                    state=VadState.SILENCE,
+                    duration_ms=self._silence_ms,
+                    metadata={
+                        "discarded_short_speech": True,
+                        "speech_ms": self._speech_ms,
+                        "min_speech_ms": self.min_speech_ms,
+                    },
+                )
+            )
+            self._reset_after_turn(VadState.SILENCE)
+            return TurnManagerResult(events=events)
+
         turn = CallerTurn(
             turn_id=f"turn_{uuid4().hex[:12]}",
             session_id=frame.session_id,
@@ -91,6 +110,7 @@ class TurnManager:
             duration_ms=duration_ms,
             pre_speech_padding_ms=self.pre_speech_padding_ms,
             silence_threshold_ms=self.silence_threshold_ms,
+            min_speech_ms=self.min_speech_ms,
             barge_in=self._barge_in,
         )
         events.extend(
@@ -110,10 +130,13 @@ class TurnManager:
                 ),
             ]
         )
-        self.state = VadState.THINKING
+        self._reset_after_turn(VadState.THINKING)
+        return TurnManagerResult(events=events, committed_turn=turn)
+
+    def _reset_after_turn(self, state: VadState) -> None:
+        self.state = state
         self._in_speech = False
         self._silence_ms = 0
         self._speech_ms = 0
         self._turn_started_at = None
         self._barge_in = False
-        return TurnManagerResult(events=events, committed_turn=turn)

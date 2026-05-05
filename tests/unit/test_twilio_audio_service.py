@@ -9,6 +9,7 @@ from app.models.telephony import TelephonyCodec, TelephonyProvider
 from app.services.audio_frame_service import decode_pcm16
 from app.services.twilio_audio_service import (
     TwilioMediaError,
+    build_twilio_clear_event,
     build_twilio_mark_event,
     build_twilio_media_event,
     chunk_mulaw_audio_for_twilio,
@@ -140,6 +141,12 @@ def test_twilio_outbound_media_and_mark_event_shapes() -> None:
         "streamSid": "MZ123",
         "mark": {"name": "narayana_tts_test"},
     }
+
+
+def test_twilio_clear_event_shape() -> None:
+    assert build_twilio_clear_event("MZ123") == {"event": "clear", "streamSid": "MZ123"}
+    with pytest.raises(TwilioMediaError, match="streamSid"):
+        build_twilio_clear_event("")
 
 
 def test_estimate_audio_duration_for_mulaw_bytes() -> None:

@@ -80,7 +80,14 @@ class Settings:
     assistant_allowed_topics: tuple[str, ...] = DEFAULT_ASSISTANT_ALLOWED_TOPICS
     assistant_decline_off_topic: bool = True
     assistant_response_max_chars: int = 180
-    call_no_reply_seconds: float = 10.0
+    turn_silence_threshold_ms: int = 750
+    turn_pre_speech_padding_ms: int = 200
+    vad_energy_threshold: float = 0.02
+    min_speech_ms: int = 300
+    call_audit_enabled: bool = True
+    call_audit_log_transcripts: bool = True
+    call_audit_max_sessions: int = 50
+    call_no_reply_seconds: float = 15.0
     call_no_reply_prompt_seconds: float = 15.0
     call_max_no_reply_prompts: int = 2
     call_max_off_topic_redirects: int = 2
@@ -151,7 +158,14 @@ class Settings:
             assistant_allowed_topics=_csv(os.getenv("ASSISTANT_ALLOWED_TOPICS"), DEFAULT_ASSISTANT_ALLOWED_TOPICS),
             assistant_decline_off_topic=_truthy(os.getenv("ASSISTANT_DECLINE_OFF_TOPIC"), default=True),
             assistant_response_max_chars=int(os.getenv("ASSISTANT_RESPONSE_MAX_CHARS", "180")),
-            call_no_reply_seconds=float(os.getenv("CALL_NO_REPLY_SECONDS", "10")),
+            turn_silence_threshold_ms=int(os.getenv("TURN_SILENCE_THRESHOLD_MS", "750")),
+            turn_pre_speech_padding_ms=int(os.getenv("TURN_PRE_SPEECH_PADDING_MS", "200")),
+            vad_energy_threshold=float(os.getenv("VAD_ENERGY_THRESHOLD", "0.02")),
+            min_speech_ms=int(os.getenv("MIN_SPEECH_MS", "300")),
+            call_audit_enabled=_truthy(os.getenv("CALL_AUDIT_ENABLED"), default=True),
+            call_audit_log_transcripts=_truthy(os.getenv("CALL_AUDIT_LOG_TRANSCRIPTS"), default=True),
+            call_audit_max_sessions=int(os.getenv("CALL_AUDIT_MAX_SESSIONS", "50")),
+            call_no_reply_seconds=float(os.getenv("CALL_NO_REPLY_SECONDS", "15")),
             call_no_reply_prompt_seconds=float(os.getenv("CALL_NO_REPLY_PROMPT_SECONDS", "15")),
             call_max_no_reply_prompts=int(os.getenv("CALL_MAX_NO_REPLY_PROMPTS", "2")),
             call_max_off_topic_redirects=int(os.getenv("CALL_MAX_OFF_TOPIC_REDIRECTS", "2")),

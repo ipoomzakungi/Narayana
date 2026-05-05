@@ -33,16 +33,18 @@ def frame(sequence: int, amplitude: int, session_id: str = "session_processor") 
 
 async def drain_case_payload(processor: AudioSessionProcessor, session_id: str = "session_processor") -> dict:
     payloads: list[dict] = []
-    payloads.extend(await processor.process_frame(frame(1, 24000, session_id=session_id)))
-    for sequence in range(2, 41):
+    for sequence in range(1, 17):
+        payloads.extend(await processor.process_frame(frame(sequence, 24000, session_id=session_id)))
+    for sequence in range(17, 56):
         payloads.extend(await processor.process_frame(frame(sequence, 0, session_id=session_id)))
     return [payload for payload in payloads if payload["type"] == "triage.case.created"][0]
 
 
 async def drain_payloads(processor: AudioSessionProcessor, session_id: str = "session_processor") -> list[dict]:
     payloads: list[dict] = []
-    payloads.extend(await processor.process_frame(frame(1, 24000, session_id=session_id)))
-    for sequence in range(2, 41):
+    for sequence in range(1, 17):
+        payloads.extend(await processor.process_frame(frame(sequence, 24000, session_id=session_id)))
+    for sequence in range(17, 56):
         payloads.extend(await processor.process_frame(frame(sequence, 0, session_id=session_id)))
     return payloads
 
@@ -97,6 +99,34 @@ async def test_processor_local_payload_omits_telephony_metadata(tmp_path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_processor_uses_configured_turn_thresholds(tmp_path) -> None:
+    processor = AudioSessionProcessor(
+        settings=Settings(
+            use_mock_services=True,
+            turn_silence_threshold_ms=500,
+            turn_pre_speech_padding_ms=180,
+            vad_energy_threshold=0.015,
+            min_speech_ms=300,
+            case_store_path=str(tmp_path / "cases.json"),
+            audio_store_path=str(tmp_path / "audio"),
+        ),
+        session_id="session_processor",
+    )
+
+    payloads = await drain_payloads(processor)
+    committed = [
+        payload["event"]
+        for payload in payloads
+        if payload["type"] == "debug.event" and payload["event"]["event_type"] == "turn.committed"
+    ][0]
+
+    assert committed["metadata"]["silence_threshold_ms"] == 500
+    assert committed["metadata"]["pre_speech_padding_ms"] == 180
+    assert committed["metadata"]["vad_energy_threshold"] == 0.015
+    assert committed["metadata"]["min_speech_ms"] == 300
+
+
+@pytest.mark.asyncio
 async def test_processor_phone_payload_includes_source_metadata(tmp_path) -> None:
     metadata = CallMetadata(
         provider=TelephonyProvider.TWILIO,
@@ -141,7 +171,7 @@ async def test_processor_multi_turn_disabled_keeps_direct_case_payload(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_processor_multi_turn_enabled_emits_followup(tmp_path, monkeypatch) -> None:
+async def test_processor_multi_turn_enabled_emits_followup(tmp_path, monkeypatch, caplog) -> None:
     import app.services.audio_session_processor as processor_module
 
     monkeypatch.setattr(processor_module, "get_voice_provider", lambda settings, requested_mode=None: StaticTranscriptProvider("น้ำท่วมอยู่ที่หาดใหญ่"))
@@ -155,7 +185,8 @@ async def test_processor_multi_turn_enabled_emits_followup(tmp_path, monkeypatch
         session_id="session_followup",
     )
 
-    payloads = await drain_payloads(processor, session_id="session_followup")
+    with caplog.at_level("INFO", logger="app.services.audio_session_processor"):
+        payloads = await drain_payloads(processor, session_id="session_followup")
     followups = [payload for payload in payloads if payload["type"] == "intake.followup"]
 
     assert followups
@@ -163,6 +194,10 @@ async def test_processor_multi_turn_enabled_emits_followup(tmp_path, monkeypatch
     assert followups[0]["response_text"]
     assert followups[0]["case_group"] == "flood"
     assert "injuries" in followups[0]["missing_fields"]
+    assert "caller.turn.committed" in caplog.text
+    assert "caller.turn.transcribed" in caplog.text
+    assert "intake.followup" in caplog.text
+    assert "assistant.response" in caplog.text
 
 
 @pytest.mark.asyncio

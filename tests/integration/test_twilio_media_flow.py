@@ -33,6 +33,13 @@ def media(sequence: int, amplitude: int) -> dict:
     }
 
 
+def send_committable_turn(websocket, start_sequence: int = 2) -> None:
+    for sequence in range(start_sequence, start_sequence + 16):
+        websocket.send_json(media(sequence, 24000))
+    for sequence in range(start_sequence + 16, start_sequence + 56):
+        websocket.send_json(media(sequence, 0))
+
+
 def close_twilio_ws(websocket) -> None:
     websocket.send_json({"event": "stop"})
     for _ in range(80):
@@ -78,9 +85,7 @@ def test_simulated_twilio_media_stream_creates_mock_red_case(tmp_path, monkeypat
         assert start_message["type"] == "session.started"
         assert start_message["source_input_mode"] == "twilio_call"
 
-        websocket.send_json(media(2, 24000))
-        for sequence in range(3, 42):
-            websocket.send_json(media(sequence, 0))
+        send_committable_turn(websocket)
 
         messages = []
         for _ in range(100):
@@ -162,9 +167,7 @@ def test_simulated_twilio_media_stream_can_emit_intake_followup(tmp_path, monkey
             }
         )
         assert websocket.receive_json()["type"] == "session.started"
-        websocket.send_json(media(2, 24000))
-        for sequence in range(3, 42):
-            websocket.send_json(media(sequence, 0))
+        send_committable_turn(websocket)
 
         messages = []
         for _ in range(100):
@@ -326,9 +329,7 @@ def test_twilio_initial_greeting_failure_continues_media_flow(tmp_path, monkeypa
             }
         )
         assert websocket.receive_json()["type"] == "session.started"
-        websocket.send_json(media(2, 24000))
-        for sequence in range(3, 42):
-            websocket.send_json(media(sequence, 0))
+        send_committable_turn(websocket)
 
         messages = []
         for _ in range(100):
@@ -415,9 +416,7 @@ def test_twilio_speakback_sends_json_then_media_and_mark(tmp_path, monkeypatch) 
             }
         )
         assert websocket.receive_json()["type"] == "session.started"
-        websocket.send_json(media(2, 24000))
-        for sequence in range(3, 42):
-            websocket.send_json(media(sequence, 0))
+        send_committable_turn(websocket)
 
         messages = []
         for _ in range(120):

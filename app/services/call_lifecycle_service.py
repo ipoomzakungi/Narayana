@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.core.config import Settings
 
@@ -23,6 +23,13 @@ class CallLifecycleState:
     no_reply_prompt_count: int = 0
     call_end_recommended: bool = False
     call_end_reason: str = ""
+    assistant_speaking: bool = False
+    active_mark_name: str | None = None
+    active_tts_purpose: str | None = None
+    assistant_playback_started_at: datetime | None = None
+    assistant_playback_completed_at: datetime | None = None
+    assistant_playback_deadline_at: datetime | None = None
+    interrupted_mark_names: set[str] | None = None
 
 
 class CallLifecycleService:
@@ -36,6 +43,57 @@ class CallLifecycleService:
     def track_greeting_sent(self, state: CallLifecycleState, when: datetime | None = None) -> None:
         state.greeting_sent_at = when or utc_now()
 
+    def track_assistant_playback_started(
+        self,
+        state: CallLifecycleState,
+        *,
+        mark_name: str,
+        purpose: str,
+        estimated_duration_ms: int = 0,
+        when: datetime | None = None,
+    ) -> None:
+        now = when or utc_now()
+        state.assistant_speaking = True
+        state.active_mark_name = mark_name
+        state.active_tts_purpose = purpose
+        state.assistant_playback_started_at = now
+        state.assistant_playback_completed_at = None
+        fallback_seconds = max(0.05, estimated_duration_ms / 1000 + 0.05)
+        state.assistant_playback_deadline_at = now + timedelta(seconds=fallback_seconds)
+
+    def track_assistant_playback_completed(
+        self,
+        state: CallLifecycleState,
+        *,
+        mark_name: str | None = None,
+        when: datetime | None = None,
+    ) -> bool:
+        if mark_name and state.active_mark_name and mark_name != state.active_mark_name:
+            return False
+        state.assistant_speaking = False
+        state.assistant_playback_completed_at = when or utc_now()
+        state.active_mark_name = None
+        state.active_tts_purpose = None
+        state.assistant_playback_deadline_at = None
+        return True
+
+    def track_assistant_playback_interrupted(self, state: CallLifecycleState, when: datetime | None = None) -> None:
+        if state.interrupted_mark_names is None:
+            state.interrupted_mark_names = set()
+        if state.active_mark_name:
+            state.interrupted_mark_names.add(state.active_mark_name)
+        state.assistant_speaking = False
+        state.assistant_playback_completed_at = when or utc_now()
+        state.active_mark_name = None
+        state.active_tts_purpose = None
+        state.assistant_playback_deadline_at = None
+
+    def maybe_complete_expired_playback(self, state: CallLifecycleState, now: datetime | None = None) -> bool:
+        now = now or utc_now()
+        if state.assistant_speaking and state.assistant_playback_deadline_at and now >= state.assistant_playback_deadline_at:
+            return self.track_assistant_playback_completed(state, when=now)
+        return False
+
     def track_caller_speech(self, state: CallLifecycleState, when: datetime | None = None) -> None:
         state.last_caller_speech_at = when or utc_now()
         state.call_end_recommended = False
@@ -48,14 +106,20 @@ class CallLifecycleService:
         return NO_REPLY_FINAL_CLOSE_TEXT
 
     def should_prompt_no_reply(self, state: CallLifecycleState, now: datetime | None = None) -> bool:
+        self.maybe_complete_expired_playback(state, now)
         if not self.enabled or not self.settings.call_end_on_no_reply or not state.greeting_sent_at:
+            return False
+        if state.assistant_speaking:
             return False
         if state.call_end_recommended or state.no_reply_prompt_count >= self.settings.call_max_no_reply_prompts:
             return False
         return self._seconds_since_reference(state, now or utc_now()) >= self._required_wait_seconds(state)
 
     def should_close_for_no_reply(self, state: CallLifecycleState, now: datetime | None = None) -> bool:
+        self.maybe_complete_expired_playback(state, now)
         if not self.enabled or not self.settings.call_end_on_no_reply or not state.greeting_sent_at:
+            return False
+        if state.assistant_speaking:
             return False
         if state.no_reply_prompt_count < self.settings.call_max_no_reply_prompts:
             return False
@@ -80,6 +144,10 @@ class CallLifecycleService:
         if state.call_end_recommended:
             return None
         now = now or utc_now()
+        if state.assistant_speaking and state.assistant_playback_deadline_at:
+            return max(0.01, (state.assistant_playback_deadline_at - now).total_seconds())
+        if state.assistant_speaking:
+            return None
         if state.no_reply_prompt_count >= self.settings.call_max_no_reply_prompts:
             required = self.settings.call_no_reply_prompt_seconds
         else:
@@ -94,7 +162,14 @@ class CallLifecycleService:
 
     def _seconds_since_reference(self, state: CallLifecycleState, now: datetime) -> float:
         references = [
-            value for value in (state.greeting_sent_at, state.last_caller_speech_at, state.last_no_reply_prompt_at) if value
+            value
+            for value in (
+                state.greeting_sent_at,
+                state.assistant_playback_completed_at,
+                state.last_caller_speech_at,
+                state.last_no_reply_prompt_at,
+            )
+            if value
         ]
         reference = max(references) if references else None
         if reference is None:
