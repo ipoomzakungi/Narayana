@@ -20,6 +20,8 @@ class CrisisCase(TriageResult):
     realtime_provider: str | None = None
     realtime_model_or_deployment: str | None = None
     realtime_transcript_turns: list[dict] = Field(default_factory=list)
+    full_transcript: str | None = None
+    final_structured_fields: dict = Field(default_factory=dict)
     caller_tone: str | None = None
     recommended_operator_action: str | None = None
     call_started_at: datetime | None = None
@@ -52,6 +54,8 @@ class CaseRepositoryRecord(BaseModel):
     realtime_provider: str | None = None
     realtime_model_or_deployment: str | None = None
     realtime_transcript_turns: list[dict] = Field(default_factory=list)
+    full_transcript: str | None = None
+    final_structured_fields: dict = Field(default_factory=dict)
     caller_tone: str | None = None
     missing_fields: list[str] = Field(default_factory=list)
     recommended_operator_action: str | None = None

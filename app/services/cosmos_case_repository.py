@@ -41,6 +41,8 @@ class CosmosCaseRepository:
             realtime_provider=case.realtime_provider,
             realtime_model_or_deployment=case.realtime_model_or_deployment,
             realtime_transcript_turns=case.realtime_transcript_turns,
+            full_transcript=case.full_transcript,
+            final_structured_fields=case.final_structured_fields,
             caller_tone=case.caller_tone,
             missing_fields=case.missing_fields,
             recommended_operator_action=case.recommended_operator_action,

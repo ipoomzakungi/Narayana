@@ -9,10 +9,13 @@ import sys
 from typing import Any
 
 import websockets
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+load_dotenv(ROOT / ".env", override=False)
 
 from app.core.config import Settings
 from app.services.realtime_voice_provider import (

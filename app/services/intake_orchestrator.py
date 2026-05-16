@@ -284,7 +284,7 @@ class IntakeOrchestrator:
 
     async def _create_case(self, state: IntakeSessionState, decision: IntakeDecision):
         fields = state.collected_fields
-        summary = _conversation_summary(state)
+        summary = state.final_ai_summary or _conversation_summary(state)
         recommended_operator_action = state.recommended_operator_action or (
             "immediate_human_review"
             if decision.human_review_required or decision.triage_level == TriageLevel.RED
@@ -312,6 +312,8 @@ class IntakeOrchestrator:
             "realtime_provider": state.realtime_provider,
             "realtime_model_or_deployment": state.realtime_model_or_deployment,
             "realtime_transcript_turns": state.realtime_transcript_turns,
+            "full_transcript": state.full_transcript or _full_realtime_transcript(state),
+            "final_structured_fields": state.final_structured_fields or fields.model_dump(mode="json"),
             "caller_tone": state.caller_tone,
             "recommended_operator_action": recommended_operator_action,
             "call_started_at": state.call_started_at,
@@ -391,6 +393,21 @@ def _conversation_summary(state: IntakeSessionState) -> str:
     if not caller_turns:
         return ""
     return " | ".join(caller_turns)[-500:]
+
+
+def _full_realtime_transcript(state: IntakeSessionState) -> str:
+    turns = [
+        f"{turn.get('speaker', 'unknown')}: {turn.get('text', '')}".strip()
+        for turn in state.realtime_transcript_turns
+        if turn.get("text") and not turn.get("is_delta")
+    ]
+    if not turns:
+        turns = [
+            f"{turn.speaker.value}: {turn.text}".strip()
+            for turn in state.conversation_turns
+            if turn.text
+        ]
+    return "\n".join(turns)
 
 
 def _source_provider_for_state(state: IntakeSessionState, settings: Settings) -> ProviderMode:

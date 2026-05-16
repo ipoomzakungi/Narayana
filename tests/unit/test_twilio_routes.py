@@ -633,6 +633,130 @@ async def test_realtime_transcript_plus_structured_extraction_updates_existing_c
 
 
 @pytest.mark.asyncio
+async def test_finalize_realtime_call_summary_updates_existing_case_after_call_end(tmp_path) -> None:
+    import json
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    settings = Settings(
+        use_mock_services=True,
+        enable_realtime_voice=True,
+        realtime_provider="azure_openai_realtime",
+        azure_realtime_deployment="gpt-realtime-1.5",
+        case_store_path=str(tmp_path / "cases.json"),
+    )
+    websocket = FakeWebSocket()
+    session_id = "twilio_CA_REALTIME_FINAL"
+    call_id = "CA_REALTIME_FINAL"
+    structured = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.STRUCTURED_EXTRACTION,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        metadata={
+            "tool_arguments": {
+                "situation": "ไฟไหม้บ้าน",
+                "incident_type": "fire",
+                "location": "หาดใหญ่",
+                "people_affected": 2,
+                "injuries": "สำลักควัน",
+                "immediate_needs": ["fire", "medical"],
+                "caller_phone": "+15550001111",
+                "language": "th",
+                "missing_fields": ["landmark"],
+                "caller_tone": "urgent",
+                "recommended_operator_action": "immediate_human_review",
+            },
+        },
+    )
+
+    await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=settings,
+        event=structured,
+        stream_sid="MZ123",
+        session_id=session_id,
+        call_id=call_id,
+    )
+    state = get_intake_session_store().snapshot(session_id)
+    assert state is not None
+    state.realtime_transcript_turns.append(
+        {
+            "speaker": "caller",
+            "text": "ไฟไหม้บ้านที่หาดใหญ่ มีคนสำลักควันสองคน",
+            "is_delta": False,
+            "provider": "azure_openai_realtime",
+        }
+    )
+    get_intake_session_store().save(state)
+    original_case_id = state.final_case_id
+
+    result = await routes_twilio.finalize_realtime_call_summary(
+        settings=settings,
+        session_id=session_id,
+        call_id=call_id,
+        realtime_transcript_turns=state.realtime_transcript_turns,
+        collected_fields=state.collected_fields,
+    )
+
+    assert result["case_id"] == original_case_id
+    assert result["ai_summary"]
+    assert result["caller_tone"] == "urgent"
+    data = json.loads((tmp_path / "cases.json").read_text(encoding="utf-8"))
+    assert list(data) == [original_case_id]
+    stored = data[original_case_id]
+    assert stored["case"]["ai_summary"] == result["ai_summary"]
+    assert stored["case"]["full_transcript"].startswith("caller:")
+    assert stored["case"]["final_structured_fields"]["location_text"] == "หาดใหญ่"
+    assert stored["case"]["realtime_provider"] == "azure_openai_realtime"
+    assert stored["case"]["realtime_model_or_deployment"] == "gpt-realtime-1.5"
+
+
+@pytest.mark.asyncio
+async def test_finalize_realtime_call_summary_creates_case_when_no_case_but_signal_exists(tmp_path) -> None:
+    import json
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    settings = Settings(
+        use_mock_services=True,
+        enable_realtime_voice=True,
+        realtime_provider="azure_openai_realtime",
+        azure_realtime_deployment="gpt-realtime-1.5",
+        case_store_path=str(tmp_path / "cases.json"),
+    )
+    fields = routes_twilio.IntakeCollectedFields(
+        language="th",
+        incident_type=routes_twilio.IncidentType.FIRE,
+        location_text="หาดใหญ่",
+        injuries="ควันไฟ",
+        missing_fields=["people_affected"],
+    )
+    turns = [
+        {
+            "speaker": "caller",
+            "text": "ไฟไหม้ที่หาดใหญ่ มีควันไฟ",
+            "is_delta": False,
+            "provider": "azure_openai_realtime",
+        }
+    ]
+
+    result = await routes_twilio.finalize_realtime_call_summary(
+        settings=settings,
+        session_id="twilio_CA_FINAL_CREATE",
+        call_id="CA_FINAL_CREATE",
+        realtime_transcript_turns=turns,
+        collected_fields=fields,
+    )
+
+    assert result["case_id"]
+    data = json.loads((tmp_path / "cases.json").read_text(encoding="utf-8"))
+    assert list(data) == [result["case_id"]]
+    stored = data[result["case_id"]]
+    assert stored["source_provider"] == "azure_openai_realtime"
+    assert stored["case"]["status"] == "pending"
+    assert stored["case"]["human_review_required"] is True
+
+
+@pytest.mark.asyncio
 async def test_unknown_realtime_provider_event_is_logged_safely(caplog) -> None:
     import app.api.routes_twilio as routes_twilio
 

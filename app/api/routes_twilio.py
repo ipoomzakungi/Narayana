@@ -11,15 +11,23 @@ from fastapi.responses import Response
 
 from app.core.config import get_settings
 from app.models.audio import VadState
-from app.models.intake import ConversationSpeaker, IntakeAction, IntakeCollectedFields, IntakeRequest
+from app.models.intake import (
+    ConversationSpeaker,
+    IntakeAction,
+    IntakeCollectedFields,
+    IntakeDecision,
+    IntakeRequest,
+    IntakeSessionStatus,
+)
 from app.models.realtime import RealtimeAudioEvent, RealtimeAudioEventType
 from app.models.telephony import CallMetadata, TelephonyCodec, TelephonyProvider, VoiceInputMode
-from app.models.triage import IncidentType, ProviderMode
+from app.models.triage import IncidentType, ProviderMode, TriageLevel
 from app.models.tts import TTSProfile
 from app.services.audio_session_processor import AudioSessionProcessor
 from app.services.azure_speech_tts_service import AzureSpeechTTSService
 from app.services.call_audit_logger import append_audit_event, append_realtime_audit_event, log_call_event
 from app.services.call_lifecycle_service import CallLifecycleService, CallLifecycleState
+from app.services.case_grouping_service import group_case, group_requires_human_review
 from app.services.intake_guardrails import evaluate_intake_guardrails
 from app.services.intake_orchestrator import IntakeOrchestrator
 from app.services.intake_session_store import get_intake_session_store
@@ -486,6 +494,7 @@ async def _process_realtime_intake_text(
     stream_sid: str | None,
     lifecycle_service: CallLifecycleService | None = None,
     lifecycle_state: CallLifecycleState | None = None,
+    send_tts: bool = False,
 ) -> None:
     clean = text.strip()
     if not clean:
@@ -507,16 +516,200 @@ async def _process_realtime_intake_text(
     if response.action != IntakeAction.ASK_FOLLOWUP and response.created_case is not None:
         store = get_intake_session_store(settings.assistant_max_followups)
         store.mark_final(session_id, response.created_case.case.case_id, response.partial_state.status)
-    await _maybe_send_tts_response(
-        websocket,
-        payload=payload,
-        settings=settings,
-        stream_sid=stream_sid,
-        call_id=call_id,
-        session_id=session_id,
-        lifecycle_service=lifecycle_service,
-        lifecycle_state=lifecycle_state,
+    if send_tts:
+        await _maybe_send_tts_response(
+            websocket,
+            payload=payload,
+            settings=settings,
+            stream_sid=stream_sid,
+            call_id=call_id,
+            session_id=session_id,
+            lifecycle_service=lifecycle_service,
+            lifecycle_state=lifecycle_state,
+        )
+
+
+def _full_realtime_transcript(realtime_transcript_turns: list[dict]) -> str:
+    completed = [
+        f"{turn.get('speaker', 'unknown')}: {turn.get('text', '')}".strip()
+        for turn in realtime_transcript_turns
+        if turn.get("text") and not turn.get("is_delta")
+    ]
+    if not completed:
+        completed = [
+            f"{turn.get('speaker', 'unknown')}: {turn.get('text', '')}".strip()
+            for turn in realtime_transcript_turns
+            if turn.get("text")
+        ]
+    return "\n".join(completed)
+
+
+def _final_summary_from_realtime(
+    *,
+    realtime_transcript_turns: list[dict],
+    collected_fields: IntakeCollectedFields,
+    caller_tone: str | None,
+    recommended_operator_action: str | None,
+) -> dict:
+    transcript = _full_realtime_transcript(realtime_transcript_turns)
+    facts = []
+    if collected_fields.incident_type and collected_fields.incident_type != IncidentType.UNKNOWN:
+        facts.append(f"incident_type={collected_fields.incident_type.value}")
+    if collected_fields.location_text:
+        facts.append(f"location={collected_fields.location_text}")
+    if collected_fields.people_affected is not None:
+        facts.append(f"people_affected={collected_fields.people_affected}")
+    if collected_fields.injuries:
+        facts.append(f"injuries={collected_fields.injuries}")
+    if collected_fields.immediate_needs:
+        facts.append(f"needs={', '.join(collected_fields.immediate_needs)}")
+    missing_fields = list(collected_fields.missing_fields)
+    if not collected_fields.location_text and "location" not in missing_fields:
+        missing_fields.append("location")
+    if collected_fields.incident_type == IncidentType.UNKNOWN and "incident_type" not in missing_fields:
+        missing_fields.append("incident_type")
+    if collected_fields.people_affected is None and "people_affected" not in missing_fields:
+        missing_fields.append("people_affected")
+    action = recommended_operator_action or "operator_review"
+    if collected_fields.urgency_signals or collected_fields.injuries:
+        action = "immediate_human_review"
+    return {
+        "ai_summary": "; ".join(facts) or (transcript[-500:] if transcript else "Realtime call requires operator review."),
+        "missing_fields": missing_fields,
+        "caller_tone": caller_tone or "unknown",
+        "recommended_operator_action": action,
+        "final_structured_fields": collected_fields.model_dump(mode="json"),
+        "full_transcript": transcript,
+    }
+
+
+def _realtime_case_signal(state, transcript_text: str = "") -> bool:
+    fields = state.collected_fields
+    has_location_and_type = bool(fields.location_text and fields.incident_type != IncidentType.UNKNOWN)
+    if has_location_and_type:
+        return True
+    guardrails = evaluate_intake_guardrails(transcript_text or _full_realtime_transcript(state.realtime_transcript_turns), state)
+    return bool(guardrails.forced_human_review or guardrails.forced_triage_level or fields.urgency_signals or fields.injuries)
+
+
+async def _persist_realtime_case_from_state(
+    *,
+    settings,
+    session_id: str,
+    call_id: str,
+    reason: str,
+    final_summary: dict | None = None,
+    force: bool = False,
+):
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.snapshot(session_id)
+    if state is None:
+        return None, None
+    transcript = _full_realtime_transcript(state.realtime_transcript_turns)
+    if not force and not _realtime_case_signal(state, transcript):
+        return None, None
+
+    summary = final_summary or _final_summary_from_realtime(
+        realtime_transcript_turns=state.realtime_transcript_turns,
+        collected_fields=state.collected_fields,
+        caller_tone=state.caller_tone,
+        recommended_operator_action=state.recommended_operator_action,
     )
+    state.collected_fields.missing_fields = list(summary["missing_fields"])
+    state.caller_tone = summary["caller_tone"]
+    state.recommended_operator_action = summary["recommended_operator_action"]
+    state.full_transcript = summary["full_transcript"]
+    state.final_ai_summary = summary["ai_summary"]
+    state.final_structured_fields = dict(summary["final_structured_fields"])
+    state.decision_audit.append(
+        {
+            "action": "realtime_case_persist",
+            "reason": reason,
+            "missing_fields": summary["missing_fields"],
+            "caller_tone": summary["caller_tone"],
+            "recommended_operator_action": summary["recommended_operator_action"],
+            "final_summary": bool(final_summary),
+        }
+    )
+    store.save(state)
+
+    group, team, group_reason = group_case(state.collected_fields, transcript)
+    high_risk = _realtime_case_signal(state, transcript)
+    triage_level = TriageLevel.RED if high_risk and (state.collected_fields.injuries or state.collected_fields.urgency_signals) else TriageLevel.YELLOW
+    action = IntakeAction.ESCALATE_HUMAN_REVIEW if high_risk or group_requires_human_review(group) else IntakeAction.CREATE_CASE
+    decision = IntakeDecision(
+        action=action,
+        language=state.collected_fields.language,
+        updated_fields=state.collected_fields,
+        case_group=group,
+        recommended_team=team,
+        triage_level=triage_level,
+        confidence=0.82 if state.collected_fields.location_text else 0.62,
+        human_review_required=True,
+        missing_fields=summary["missing_fields"],
+        response_text="",
+        reason=f"{reason}. {group_reason}".strip(),
+        guardrail_warnings=list(state.guardrail_warnings),
+    )
+    state.triage_level = decision.triage_level
+    state.confidence = decision.confidence
+    state.human_review_required = decision.human_review_required
+    state.case_group = decision.case_group
+    state.recommended_team = decision.recommended_team
+    store.save(state)
+    event_type = "case.updated" if state.final_case_id else "triage.case.created"
+    record = await IntakeOrchestrator(settings)._create_case(state, decision)
+    final_status = IntakeSessionStatus.ESCALATED if action == IntakeAction.ESCALATE_HUMAN_REVIEW else IntakeSessionStatus.CASE_CREATED
+    state = store.mark_final(session_id, record.case.case_id, final_status)
+    store.save(state)
+    log_call_event(
+        logger,
+        event_type,
+        session_id=session_id,
+        call_id=call_id,
+        metadata={"case_id": record.case.case_id, "reason": reason, "source": "realtime"},
+    )
+    append_audit_event(
+        store,
+        settings,
+        session_id,
+        event_type=event_type,
+        triage_level=decision.triage_level,
+        case_group=decision.case_group.value,
+        recommended_team=decision.recommended_team,
+        guardrail_warnings=decision.guardrail_warnings,
+        metadata={"case_id": record.case.case_id, "reason": reason, "source": "realtime"},
+    )
+    payload = {
+        "type": event_type,
+        "session_id": session_id,
+        "transcript": transcript,
+        "provider_mode": ProviderMode.AZURE_OPENAI_REALTIME.value,
+        "transcript_source": "realtime",
+        "response_text": "",
+        "warnings": decision.guardrail_warnings,
+        "action": decision.action.value,
+        "case_group": decision.case_group.value,
+        "recommended_team": decision.recommended_team,
+        "triage_level": decision.triage_level.value,
+        "human_review_required": decision.human_review_required,
+        "missing_fields": decision.missing_fields,
+        "reason": decision.reason,
+        "guardrail_warnings": decision.guardrail_warnings,
+        "partial_state": state.model_dump(mode="json"),
+        "source_input_mode": VoiceInputMode.TWILIO_CALL.value,
+        "record": record.model_dump(mode="json"),
+        "intake": {
+            "action": decision.action.value,
+            "case_group": decision.case_group.value,
+            "recommended_team": decision.recommended_team,
+            "missing_fields": decision.missing_fields,
+            "reason": decision.reason,
+            "guardrail_warnings": decision.guardrail_warnings,
+            "partial_state": state.model_dump(mode="json"),
+        },
+    }
+    return payload, record
 
 
 def _safe_realtime_tool_result(settings, session_id: str) -> dict:
@@ -603,6 +796,88 @@ def _intake_response_payload(response, *, transcript: str) -> dict:
     return payload
 
 
+async def finalize_realtime_call_summary(
+    *,
+    settings,
+    session_id: str,
+    call_id: str,
+    realtime_transcript_turns: list[dict],
+    collected_fields: IntakeCollectedFields,
+) -> dict:
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.get_or_create(
+        session_id,
+        call_id=call_id,
+        source_input_mode=VoiceInputMode.TWILIO_CALL.value,
+        max_followups=settings.assistant_max_followups,
+    )
+    state.realtime_provider = settings.normalized_realtime_provider
+    state.realtime_model_or_deployment = _realtime_model_or_deployment(settings, state.realtime_provider)
+    state.realtime_transcript_turns = list(realtime_transcript_turns)
+    state.collected_fields = IntakeCollectedFields.model_validate(collected_fields.model_dump())
+    state.call_ended_at = datetime.now(timezone.utc)
+    store.save(state)
+
+    summary = _final_summary_from_realtime(
+        realtime_transcript_turns=state.realtime_transcript_turns,
+        collected_fields=state.collected_fields,
+        caller_tone=state.caller_tone,
+        recommended_operator_action=state.recommended_operator_action,
+    )
+    should_persist = bool(state.final_case_id) or _realtime_case_signal(state, summary["full_transcript"])
+    record = None
+    if should_persist:
+        _, record = await _persist_realtime_case_from_state(
+            settings=settings,
+            session_id=session_id,
+            call_id=call_id,
+            reason="post_call_realtime_finalization",
+            final_summary=summary,
+            force=bool(state.final_case_id),
+        )
+    log_call_event(
+        logger,
+        "realtime.finalization.completed",
+        session_id=session_id,
+        call_id=call_id,
+        metadata={"case_id": record.case.case_id if record else None, "persisted": bool(record)},
+    )
+    return {
+        "ai_summary": summary["ai_summary"],
+        "missing_fields": summary["missing_fields"],
+        "caller_tone": summary["caller_tone"],
+        "recommended_operator_action": summary["recommended_operator_action"],
+        "final_structured_fields": summary["final_structured_fields"],
+        "full_transcript": summary["full_transcript"],
+        "case_id": record.case.case_id if record else state.final_case_id,
+    }
+
+
+async def _finalize_realtime_call_background(*, settings, session_id: str, call_id: str) -> None:
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.snapshot(session_id)
+    if state is None:
+        return
+    log_call_event(logger, "realtime.finalization.started", session_id=session_id, call_id=call_id)
+    try:
+        await finalize_realtime_call_summary(
+            settings=settings,
+            session_id=session_id,
+            call_id=call_id,
+            realtime_transcript_turns=state.realtime_transcript_turns,
+            collected_fields=state.collected_fields,
+        )
+    except Exception as exc:
+        logger.exception("realtime.finalization.failed session_id=%s call_id=%s reason=%s", session_id, call_id, exc)
+        log_call_event(
+            logger,
+            "realtime.finalization.failed",
+            session_id=session_id,
+            call_id=call_id,
+            metadata={"reason": str(exc)},
+        )
+
+
 async def _finalize_realtime_call(
     *,
     websocket: WebSocket,
@@ -615,21 +890,11 @@ async def _finalize_realtime_call(
     state = store.snapshot(session_id)
     if state is None:
         return
-    state.call_ended_at = datetime.now(timezone.utc)
-    store.save(state)
-    if state.final_case_id:
-        return
     final_caller_turns = [
         turn.get("text", "")
         for turn in state.realtime_transcript_turns
         if turn.get("speaker") == ConversationSpeaker.CALLER.value and not turn.get("is_delta")
     ]
-    if not final_caller_turns:
-        final_caller_turns = [
-            turn.get("text", "")
-            for turn in state.realtime_transcript_turns
-            if turn.get("speaker") == ConversationSpeaker.CALLER.value
-        ]
     caller_text = " ".join(final_caller_turns).strip()
     if not caller_text:
         return
@@ -643,6 +908,7 @@ async def _finalize_realtime_call(
         call_id=call_id,
         text=caller_text,
         stream_sid=stream_sid,
+        send_tts=False,
     )
 
 
@@ -741,19 +1007,20 @@ async def _handle_realtime_event(
                 call_id=call_id,
                 text=event.text,
                 stream_sid=stream_sid,
+                send_tts=False,
             )
     if event.event_type == RealtimeAudioEventType.STRUCTURED_EXTRACTION:
         arguments = event.metadata.get("tool_arguments") if isinstance(event.metadata, dict) else {}
         if isinstance(arguments, dict):
             _merge_realtime_extraction_into_state(settings=settings, session_id=session_id, arguments=arguments)
-            await _process_realtime_intake_text(
-                websocket=websocket,
+            payload, _ = await _persist_realtime_case_from_state(
                 settings=settings,
                 session_id=session_id,
                 call_id=call_id,
-                text=_transcript_from_realtime_extraction(arguments),
-                stream_sid=stream_sid,
+                reason="realtime_structured_extraction",
             )
+            if payload is not None:
+                await websocket.send_json(payload)
             await _send_realtime_tool_result(
                 provider_client=provider_client,
                 settings=settings,
@@ -1437,12 +1704,12 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
             if event == "stop":
                 log_call_event(logger, "call.closed", session_id=session_id, call_id=call_id, metadata={"reason": "twilio_stop"})
                 if realtime_selection.enabled:
-                    await _finalize_realtime_call(
-                        websocket=websocket,
-                        settings=settings,
-                        session_id=session_id,
-                        call_id=call_id,
-                        stream_sid=stream_sid,
+                    asyncio.create_task(
+                        _finalize_realtime_call_background(
+                            settings=settings,
+                            session_id=session_id,
+                            call_id=call_id,
+                        )
                     )
                 if realtime_provider is not None:
                     await realtime_provider.close()

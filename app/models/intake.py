@@ -153,6 +153,9 @@ class IntakeSessionState(BaseModel):
     realtime_provider: str | None = None
     realtime_model_or_deployment: str | None = None
     realtime_transcript_turns: list[dict[str, Any]] = Field(default_factory=list)
+    full_transcript: str | None = None
+    final_ai_summary: str | None = None
+    final_structured_fields: dict[str, Any] = Field(default_factory=dict)
     caller_tone: str | None = None
     recommended_operator_action: str | None = None
     call_started_at: datetime | None = None
