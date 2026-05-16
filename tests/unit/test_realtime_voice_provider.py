@@ -141,12 +141,32 @@ def test_openai_realtime_session_update_uses_twilio_compatible_audio_and_tool() 
     assert session["tools"][0]["name"] == "crisis_intake_update"
     assert "caller_tone" in session["tools"][0]["parameters"]["properties"]
     assert session["tool_choice"] == "auto"
+    assert session["turn_detection"]["create_response"] is True
+    assert session["turn_detection"]["interrupt_response"] is True
+    assert "input_audio_transcription" not in session
 
 
 def test_realtime_session_update_can_select_g711_ulaw_input() -> None:
     payload = build_openai_realtime_session_update(realtime_g711_settings(), "crisis only")
 
     assert payload["session"]["input_audio_format"] == "g711_ulaw"
+
+
+def test_realtime_session_update_can_enable_input_transcription() -> None:
+    payload = build_openai_realtime_session_update(
+        Settings(
+            enable_realtime_voice=True,
+            realtime_provider="azure_openai_realtime",
+            azure_realtime_endpoint="https://aoai.example.openai.azure.com",
+            azure_realtime_api_key="dummy-key",
+            azure_realtime_deployment="gpt-realtime",
+            azure_realtime_api_version="2025-04-01-preview",
+            realtime_input_transcription_enabled=True,
+        ),
+        "crisis only",
+    )
+
+    assert payload["session"]["input_audio_transcription"] == {"model": "whisper-1"}
 
 
 @pytest.mark.asyncio
@@ -302,3 +322,39 @@ async def test_provider_receive_error_returns_fallback_event() -> None:
     assert event.event_type == RealtimeAudioEventType.ERROR
     assert event.fallback_reason == "provider_error"
     assert "bad realtime" in event.warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_retries_when_input_transcription_is_rejected() -> None:
+    fake_socket = FakeProviderSocket(
+        [
+            {
+                "type": "error",
+                "error": {
+                    "message": "Unknown parameter: session.input_audio_transcription",
+                    "param": "session.input_audio_transcription",
+                },
+            }
+        ]
+    )
+    provider = AzureOpenAIRealtimeProvider(
+        Settings(
+            enable_realtime_voice=True,
+            realtime_provider="azure_openai_realtime",
+            azure_realtime_endpoint="https://aoai.example.openai.azure.com",
+            azure_realtime_api_key="dummy-key",
+            azure_realtime_deployment="gpt-realtime",
+            azure_realtime_api_version="2025-04-01-preview",
+            realtime_input_transcription_enabled=True,
+        ),
+        websocket_factory=lambda *args, **kwargs: fake_socket,
+    )
+
+    await provider.connect(session_id="twilio_CA123", call_id="CA123", instructions="crisis only")
+    event = await provider.receive_audio_event()
+
+    assert event is not None
+    assert event.event_type == RealtimeAudioEventType.UNKNOWN_PROVIDER_EVENT
+    assert fake_socket.sent[0]["session"]["input_audio_transcription"] == {"model": "whisper-1"}
+    assert "input_audio_transcription" not in fake_socket.sent[1]["session"]
+    assert "secret" not in str(event.metadata)

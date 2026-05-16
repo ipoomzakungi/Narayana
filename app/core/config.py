@@ -54,6 +54,7 @@ class Settings:
     azure_realtime_api_version: str = ""
     realtime_input_audio_format: str = "pcm16"
     realtime_twilio_audio_passthrough: bool = False
+    realtime_input_transcription_enabled: bool = False
     azure_voice_live_endpoint: str = ""
     azure_voice_live_model: str = ""
     cosmos_db_endpoint: str = ""
@@ -141,6 +142,10 @@ class Settings:
             realtime_input_audio_format=os.getenv("REALTIME_INPUT_AUDIO_FORMAT", "pcm16"),
             realtime_twilio_audio_passthrough=_truthy(
                 os.getenv("REALTIME_TWILIO_AUDIO_PASSTHROUGH"),
+                default=False,
+            ),
+            realtime_input_transcription_enabled=_truthy(
+                os.getenv("REALTIME_INPUT_TRANSCRIPTION_ENABLED"),
                 default=False,
             ),
             azure_voice_live_endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT", ""),

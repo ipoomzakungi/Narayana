@@ -242,18 +242,38 @@ def build_realtime_intake_tool() -> dict[str, Any]:
     }
 
 
-def build_openai_realtime_session_update(settings: Settings, instructions: str) -> dict[str, Any]:
+def build_openai_realtime_session_update(
+    settings: Settings,
+    instructions: str,
+    *,
+    input_transcription_enabled: bool | None = None,
+) -> dict[str, Any]:
+    session: dict[str, Any] = {
+        "instructions": instructions,
+        "modalities": ["audio", "text"],
+        "input_audio_format": settings.effective_realtime_input_audio_format,
+        "output_audio_format": "g711_ulaw",
+        "turn_detection": {
+            "type": "server_vad",
+            "threshold": 0.5,
+            "prefix_padding_ms": 300,
+            "silence_duration_ms": 500,
+            "create_response": True,
+            "interrupt_response": True,
+        },
+        "tools": [build_realtime_intake_tool()],
+        "tool_choice": "auto",
+    }
+    transcription_enabled = (
+        settings.realtime_input_transcription_enabled
+        if input_transcription_enabled is None
+        else input_transcription_enabled
+    )
+    if transcription_enabled:
+        session["input_audio_transcription"] = {"model": "whisper-1"}
     return {
         "type": "session.update",
-        "session": {
-            "instructions": instructions,
-            "modalities": ["audio", "text"],
-            "input_audio_format": settings.effective_realtime_input_audio_format,
-            "output_audio_format": "g711_ulaw",
-            "turn_detection": {"type": "server_vad"},
-            "tools": [build_realtime_intake_tool()],
-            "tool_choice": "auto",
-        },
+        "session": session,
     }
 
 

@@ -26,10 +26,13 @@ class AzureOpenAIRealtimeProvider(BaseRealtimeProvider):
 
     def __init__(self, settings: Settings, websocket_factory: WebSocketFactory | None = None) -> None:
         super().__init__(settings, websocket_factory)
+        self._instructions = ""
+        self._input_transcription_disabled_after_error = False
 
     async def connect(self, *, session_id: str, call_id: str | None, instructions: str) -> RealtimeConnectionResult:
         self.session_id = session_id
         self.call_id = call_id
+        self._instructions = instructions
         tracker = self._tracker(session_id, call_id)
         tracker.start("connect")
         try:
@@ -74,7 +77,43 @@ class AzureOpenAIRealtimeProvider(BaseRealtimeProvider):
                 fallback_reason="provider_error",
                 warnings=[f"Azure OpenAI Realtime receive failed: {exc}"],
             )
+        if self._is_input_transcription_rejection(message):
+            await self._retry_without_input_transcription()
+            return self._event(
+                RealtimeAudioEventType.UNKNOWN_PROVIDER_EVENT,
+                warnings=[
+                    "Azure OpenAI Realtime rejected input audio transcription config; "
+                    "continuing without caller transcript events."
+                ],
+                metadata={
+                    "provider_event_type": "error",
+                    "realtime_input_transcription_retry": "disabled_after_provider_rejection",
+                },
+            )
         return self._normalize_message(message)
+
+    async def _retry_without_input_transcription(self) -> None:
+        if self._input_transcription_disabled_after_error:
+            return
+        self._input_transcription_disabled_after_error = True
+        await self._send_json(
+            build_openai_realtime_session_update(
+                self.settings,
+                self._instructions,
+                input_transcription_enabled=False,
+            )
+        )
+
+    def _is_input_transcription_rejection(self, message: dict) -> bool:
+        if str(message.get("type") or "") != "error":
+            return False
+        error = message.get("error") if isinstance(message.get("error"), dict) else {}
+        fields = (
+            str(error.get("message") or ""),
+            str(error.get("param") or ""),
+            str(error.get("code") or ""),
+        )
+        return any("input_audio_transcription" in field for field in fields)
 
     def _normalize_message(self, message: dict) -> RealtimeAudioEvent | None:
         event_type = str(message.get("type") or "")

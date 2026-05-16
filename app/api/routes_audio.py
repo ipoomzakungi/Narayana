@@ -65,6 +65,7 @@ async def azure_health(settings: Settings = Depends(get_settings)) -> AzureHealt
         effective_realtime_input_audio_format=settings.effective_realtime_input_audio_format,
         realtime_twilio_audio_passthrough=settings.realtime_twilio_audio_passthrough,
         realtime_input_audio_passthrough_enabled=settings.realtime_input_audio_passthrough_enabled,
+        realtime_input_transcription_enabled=settings.realtime_input_transcription_enabled,
         realtime_warnings=settings.realtime_warnings(),
         missing_variables=settings.missing_azure_variables(),
         warnings=warnings,

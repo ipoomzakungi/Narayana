@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 from datetime import datetime, timezone
 import logging
 from urllib.parse import parse_qs
@@ -193,6 +195,52 @@ def _realtime_frame_from_twilio_message(
     )
 
 
+def _decoded_audio_byte_length(audio_base64: str) -> int | None:
+    try:
+        return len(base64.b64decode(audio_base64, validate=True))
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _should_log_realtime_audio_frame(sequence: int) -> bool:
+    return 0 <= sequence <= 5 or (sequence > 0 and sequence % 50 == 0)
+
+
+def _log_realtime_audio_frame_diagnostic(
+    *,
+    settings,
+    session_id: str,
+    call_id: str,
+    stream_sid: str | None,
+    metadata: CallMetadata,
+    frame,
+) -> None:
+    if not _should_log_realtime_audio_frame(frame.sequence):
+        return
+    decoded_byte_length = _decoded_audio_byte_length(frame.audio_base64)
+    expected_byte_length = 160 if frame.encoding == "g711_ulaw" else 320 if frame.encoding == "pcm16" else None
+    log_call_event(
+        logger,
+        "realtime.audio.frame.diagnostic",
+        session_id=session_id,
+        call_id=call_id,
+        level=logging.WARNING,
+        metadata={
+            "streamSid_present": bool(stream_sid),
+            "sequence": frame.sequence,
+            "input_encoding": metadata.codec.value,
+            "sample_rate_hz": frame.sample_rate_hz,
+            "duration_ms": frame.duration_ms,
+            "raw_decoded_byte_length": decoded_byte_length,
+            "expected_byte_length": expected_byte_length,
+            "frame_size_expected": decoded_byte_length == expected_byte_length,
+            "realtime_input_format": settings.effective_realtime_input_audio_format,
+            "passthrough_enabled": settings.realtime_input_audio_passthrough_enabled,
+            "assistant_is_speaking": frame.assistant_is_speaking,
+        },
+    )
+
+
 def _realtime_event_payload(
     event_type: str,
     *,
@@ -240,7 +288,19 @@ def _log_realtime(
         "fallback_reason": fallback_reason,
         **(metadata or {}),
     }
-    log_call_event(logger, event_name, session_id=session_id, call_id=call_id, metadata=event_metadata)
+    should_emit_log = True
+    if event_type == "audio.input.sent":
+        sequence = event_metadata.get("sequence")
+        should_emit_log = isinstance(sequence, int) and _should_log_realtime_audio_frame(sequence)
+    if should_emit_log:
+        log_call_event(
+            logger,
+            event_name,
+            session_id=session_id,
+            call_id=call_id,
+            metadata=event_metadata,
+            level=logging.WARNING,
+        )
     append_realtime_audit_event(
         get_intake_session_store(settings.assistant_max_followups),
         settings,
@@ -1395,6 +1455,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
         session_id=session_id,
         call_id=call_id,
         metadata={"source_input_mode": VoiceInputMode.TWILIO_CALL.value},
+        level=logging.WARNING,
     )
     metadata = _default_call_metadata(call_id)
     initial_greeting_attempted = False
@@ -1468,6 +1529,21 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         "call_metadata": metadata.model_dump(mode="json"),
                         "realtime": _realtime_debug_payload(realtime_selection),
                     }
+                )
+                log_call_event(
+                    logger,
+                    "session.started",
+                    session_id=session_id,
+                    call_id=call_id,
+                    level=logging.WARNING,
+                    metadata={
+                        "streamSid_present": bool(stream_sid),
+                        "provider": realtime_selection.provider_mode.value,
+                        "realtime_active_candidate": realtime_selection.active_candidate,
+                        "input_audio_format": settings.effective_realtime_input_audio_format,
+                        "passthrough_enabled": settings.realtime_input_audio_passthrough_enabled,
+                        "input_transcription_enabled": settings.realtime_input_transcription_enabled,
+                    },
                 )
                 realtime_selection = get_realtime_provider(settings)
                 if realtime_selection.active_candidate and realtime_selection.provider is not None:
@@ -1601,6 +1677,14 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                     except TwilioMediaError as exc:
                         await websocket.send_json({"type": "error", "detail": str(exc)})
                         continue
+                    _log_realtime_audio_frame_diagnostic(
+                        settings=settings,
+                        session_id=session_id,
+                        call_id=call_id,
+                        stream_sid=stream_sid,
+                        metadata=metadata,
+                        frame=realtime_frame,
+                    )
                     send_result = await realtime_provider.send_audio_frame(realtime_frame)
                     if send_result.sent:
                         _log_realtime(
