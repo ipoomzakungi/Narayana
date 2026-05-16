@@ -263,8 +263,8 @@ export function VoiceDebugConsole() {
   }
 
   return (
-    <main className="min-h-screen bg-[#eef1f5] px-4 py-5 text-slate-950 md:px-8">
-      <div className="mx-auto grid max-w-7xl gap-4 xl:grid-cols-[360px_1fr]">
+    <div className="text-slate-950">
+      <div className="mx-auto grid w-full max-w-[calc(100vw-2rem)] gap-4 lg:max-w-7xl xl:grid-cols-[360px_1fr]">
         <section className="border border-command-line bg-white p-4 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -284,7 +284,7 @@ export function VoiceDebugConsole() {
               value={transcript}
               onChange={(event) => setTranscript(event.target.value)}
             />
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid gap-2 sm:grid-cols-3">
               <button
                 className="border border-slate-900 bg-slate-950 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
                 type="button"
@@ -299,14 +299,14 @@ export function VoiceDebugConsole() {
                 onClick={submitIntakeTranscript}
                 disabled={loading}
               >
-                {loading ? "Thinking..." : "Intake"}
+                {loading ? "Running intake..." : "Run Intake"}
               </button>
               <button
                 className="border border-command-line bg-white px-3 py-2 text-sm font-semibold text-slate-900"
                 type="button"
                 onClick={() => setTranscript(SAMPLE_TRANSCRIPT)}
               >
-                Thai Sample
+                Load Thai Sample
               </button>
             </div>
           </div>
@@ -352,14 +352,14 @@ export function VoiceDebugConsole() {
                 </dd>
               </div>
             </dl>
-            <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <button
                 className="border border-emerald-700 bg-emerald-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
                 type="button"
                 onClick={startRecording}
                 disabled={recording}
               >
-                Start
+                Start Local Mic
               </button>
               <button
                 className="border border-slate-500 bg-white px-3 py-2 text-sm font-semibold text-slate-900 disabled:opacity-50"
@@ -367,7 +367,7 @@ export function VoiceDebugConsole() {
                 onClick={stopRecording}
                 disabled={!recording}
               >
-                Stop
+                Stop Local Mic
               </button>
             </div>
           </div>
@@ -589,6 +589,6 @@ export function VoiceDebugConsole() {
           </div>
         </section>
       </div>
-    </main>
+    </div>
   );
 }

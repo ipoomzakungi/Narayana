@@ -95,7 +95,7 @@ describe("CallAuditDashboard", () => {
     expect(screen.getByText("tts.completed")).toBeInTheDocument();
     expect(screen.getByText("Warnings: scope:ok")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh sessions" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
   });
 });

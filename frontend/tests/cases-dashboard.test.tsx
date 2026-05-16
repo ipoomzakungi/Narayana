@@ -67,7 +67,7 @@ describe("CasesDashboard", () => {
     expect(screen.getByText("Source repository")).toBeInTheDocument();
     expect(screen.getByText("1 cases cached for 60s")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh cases" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   });
 

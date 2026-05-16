@@ -45,7 +45,7 @@ function CaseRow({ record }: { record: CaseRepositoryRecord }) {
   const recommendedTeam = record.recommended_team ?? record.case.recommended_team ?? "-";
 
   return (
-    <article className="grid gap-3 border border-command-line bg-white p-4 shadow-sm xl:grid-cols-[96px_120px_140px_minmax(140px,1fr)_minmax(240px,2fr)_110px_130px]">
+    <article className="grid min-w-0 gap-3 border border-command-line bg-white p-4 shadow-sm xl:grid-cols-[96px_120px_140px_minmax(140px,1fr)_minmax(240px,2fr)_110px_130px]">
       <div>
         <span className={`inline-flex min-w-16 justify-center px-2 py-1 text-xs font-semibold ${triageClass(record.case.triage_level)}`}>
           {record.case.triage_level}
@@ -53,7 +53,7 @@ function CaseRow({ record }: { record: CaseRepositoryRecord }) {
       </div>
       <div>
         <p className="text-xs text-slate-500">Incident</p>
-        <p className="mt-1 text-sm font-semibold text-slate-950">{record.case.incident_type}</p>
+        <p className="mt-1 break-words text-sm font-semibold text-slate-950">{record.case.incident_type}</p>
       </div>
       <div>
         <p className="text-xs text-slate-500">Group</p>
@@ -62,12 +62,12 @@ function CaseRow({ record }: { record: CaseRepositoryRecord }) {
       </div>
       <div>
         <p className="text-xs text-slate-500">Location</p>
-        <p className="mt-1 text-sm font-medium text-slate-800">{record.case.location_text || "-"}</p>
+        <p className="mt-1 break-words text-sm font-medium text-slate-800">{record.case.location_text || "-"}</p>
       </div>
       <div>
         <p className="text-xs text-slate-500">Summary</p>
-        <p className="mt-1 text-sm text-slate-800">{intakeSummary(record)}</p>
-        <p className="mt-2 text-xs text-slate-500">
+        <p className="mt-1 break-words text-sm text-slate-800">{intakeSummary(record)}</p>
+        <p className="mt-2 break-words text-xs text-slate-500">
           {record.source_provider} {record.session_id ? `/ ${record.session_id}` : ""}
         </p>
       </div>
@@ -124,8 +124,8 @@ export function CasesDashboard() {
   );
 
   return (
-    <main className="min-h-screen bg-[#eef1f5] px-4 py-5 text-slate-950 md:px-8">
-      <div className="mx-auto max-w-7xl">
+    <div className="text-slate-950">
+      <div className="mx-auto w-full max-w-[calc(100vw-2rem)] lg:max-w-7xl">
         <header className="flex flex-col gap-4 border-b border-command-line pb-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-normal">Narayana Cases</h1>
@@ -133,7 +133,7 @@ export function CasesDashboard() {
               Cached crisis intake dashboard for operator review. Narayana is an intake and triage assistant, not an official emergency hotline replacement.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          <div className="grid w-full grid-cols-1 gap-2 text-xs text-slate-600 sm:flex sm:w-auto sm:flex-wrap sm:items-center lg:justify-end">
             <span className="border border-command-line bg-white px-2 py-1">Last refreshed {formatDateTime(lastRefreshedAt)}</span>
             <span className="border border-command-line bg-white px-2 py-1">Source {snapshot?.source ?? "-"}</span>
             <span className="border border-command-line bg-white px-2 py-1">Expires {formatDateTime(snapshot?.expires_at)}</span>
@@ -143,7 +143,7 @@ export function CasesDashboard() {
               onClick={refresh}
               disabled={loading}
             >
-              {loading ? "Refreshing" : "Refresh"}
+              {loading ? "Refreshing cases..." : "Refresh cases"}
             </button>
           </div>
         </header>
@@ -158,7 +158,7 @@ export function CasesDashboard() {
         {error ? <div className="mt-4 border border-red-300 bg-red-50 p-3 text-sm text-red-800">{error}</div> : null}
 
         <section className="mt-5">
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-base font-semibold">Recent Cases</h2>
             <span className="text-sm text-slate-600">{snapshot ? `${snapshot.count} cases cached for ${snapshot.ttl_seconds}s` : "Loading cases"}</span>
           </div>
@@ -172,6 +172,6 @@ export function CasesDashboard() {
           </div>
         </section>
       </div>
-    </main>
+    </div>
   );
 }

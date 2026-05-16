@@ -124,8 +124,8 @@ export function CallAuditDashboard() {
   const timeline = useMemo(() => (selectedSession ? timelineFromSession(selectedSession) : []), [selectedSession]);
 
   return (
-    <main className="min-h-screen bg-[#eef1f5] px-4 py-5 text-slate-950 md:px-8">
-      <div className="mx-auto max-w-7xl">
+    <div className="text-slate-950">
+      <div className="mx-auto w-full max-w-[calc(100vw-2rem)] lg:max-w-7xl">
         <header className="flex flex-col gap-4 border-b border-command-line pb-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-normal">Call Audit</h1>
@@ -133,7 +133,7 @@ export function CallAuditDashboard() {
               Recent caller and assistant timeline for Narayana crisis intake debugging.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          <div className="grid w-full grid-cols-1 gap-2 text-xs text-slate-600 sm:flex sm:w-auto sm:flex-wrap sm:items-center lg:justify-end">
             <span className="border border-command-line bg-white px-2 py-1">Sessions {snapshot?.count ?? 0}</span>
             <span className="border border-command-line bg-white px-2 py-1">Generated {formatDateTime(snapshot?.generated_at)}</span>
             <button
@@ -142,7 +142,7 @@ export function CallAuditDashboard() {
               onClick={refresh}
               disabled={loading}
             >
-              {loading ? "Refreshing" : "Refresh"}
+              {loading ? "Refreshing sessions..." : "Refresh sessions"}
             </button>
           </div>
         </header>
@@ -202,6 +202,6 @@ export function CallAuditDashboard() {
           </section>
         </section>
       </div>
-    </main>
+    </div>
   );
 }

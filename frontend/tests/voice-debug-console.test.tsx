@@ -109,7 +109,7 @@ describe("VoiceDebugConsole", () => {
   it("renders websocket source metadata, audio ref, and warnings", async () => {
     render(<VoiceDebugConsole />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Local Mic" }));
     await waitFor(() => expect(mocks.createVoiceWsClient).toHaveBeenCalled());
 
     act(() => {
@@ -242,7 +242,7 @@ describe("VoiceDebugConsole", () => {
 
     render(<VoiceDebugConsole />);
     fireEvent.change(screen.getByLabelText("Transcript"), { target: { value: "น้ำท่วมอยู่ที่หาดใหญ่" } });
-    fireEvent.click(screen.getByRole("button", { name: "Intake" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Intake" }));
 
     await waitFor(() => expect(screen.getByText("ask_followup")).toBeInTheDocument());
     expect(screen.getAllByText("flood").length).toBeGreaterThan(0);
@@ -256,7 +256,7 @@ describe("VoiceDebugConsole", () => {
   it("renders websocket intake follow-up payloads", async () => {
     render(<VoiceDebugConsole />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Local Mic" }));
     await waitFor(() => expect(mocks.createVoiceWsClient).toHaveBeenCalled());
 
     act(() => {
@@ -351,7 +351,7 @@ describe("VoiceDebugConsole", () => {
   it("renders no-reply and call ending debug payloads", async () => {
     render(<VoiceDebugConsole />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Local Mic" }));
     await waitFor(() => expect(mocks.createVoiceWsClient).toHaveBeenCalled());
 
     act(() => {
