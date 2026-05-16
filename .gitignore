@@ -26,6 +26,13 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
+.local.runtime.env
+.local.runtime.env.*
+!.local.runtime.env.template
+*.secret
+*.secrets
+*.key
+*.pem
 .data/
 
 # OS / editor
