@@ -81,6 +81,8 @@ def append_realtime_audit_event(
     event_type: str,
     provider: str,
     call_id: str | None = None,
+    speaker: ConversationSpeaker | None = None,
+    text: str | None = None,
     latency_ms: int | None = None,
     warnings: list[str] | None = None,
     fallback_reason: str | None = None,
@@ -99,6 +101,8 @@ def append_realtime_audit_event(
         settings,
         session_id,
         event_type=event_type,
+        speaker=speaker,
+        text=text,
         guardrail_warnings=warnings,
         metadata=safe,
     )

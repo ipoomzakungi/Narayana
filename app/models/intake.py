@@ -150,6 +150,14 @@ class IntakeSessionState(BaseModel):
     greeting_sent_at: datetime | None = None
     call_end_recommended: bool = False
     call_end_reason: str = ""
+    realtime_provider: str | None = None
+    realtime_model_or_deployment: str | None = None
+    realtime_transcript_turns: list[dict[str, Any]] = Field(default_factory=list)
+    caller_tone: str | None = None
+    recommended_operator_action: str | None = None
+    call_started_at: datetime | None = None
+    call_ended_at: datetime | None = None
+    fallback_reason: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

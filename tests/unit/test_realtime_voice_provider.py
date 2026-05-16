@@ -11,6 +11,7 @@ from app.services.azure_openai_realtime_provider import AzureOpenAIRealtimeProvi
 from app.services.azure_voice_live_realtime_provider import AzureVoiceLiveRealtimeProvider
 from app.services.realtime_latency import RealtimeLatencyTracker
 from app.services.realtime_voice_provider import (
+    build_openai_realtime_session_update,
     build_openai_realtime_uri,
     build_realtime_instructions,
     build_voice_live_uri,
@@ -70,6 +71,21 @@ def test_openai_realtime_uri_uses_preview_deployment_format() -> None:
     assert "dummy-key" not in uri
 
 
+def test_openai_realtime_uri_uses_ga_model_format_when_requested() -> None:
+    uri = build_openai_realtime_uri(
+        Settings(
+            enable_realtime_voice=True,
+            realtime_provider="azure_openai_realtime",
+            azure_realtime_endpoint="https://aoai.example.openai.azure.com",
+            azure_realtime_api_key="dummy-key",
+            azure_realtime_deployment="gpt-realtime-1.5-prod",
+            azure_realtime_api_version="v1",
+        )
+    )
+
+    assert uri == "wss://aoai.example.openai.azure.com/openai/v1/realtime?model=gpt-realtime-1.5-prod"
+
+
 def test_voice_live_uri_adds_model_when_missing() -> None:
     uri = build_voice_live_uri(realtime_settings("azure_voice_live"))
 
@@ -94,7 +110,22 @@ def test_realtime_instructions_include_crisis_safety_rules() -> None:
 
     assert "crisis intake" in instructions
     assert "Never say rescue has been dispatched" in instructions
+    assert "Never say an ambulance is on the way" in instructions
+    assert "Never reveal RED, YELLOW, or GREEN" in instructions
     assert "Do not diagnose" in instructions
+
+
+def test_openai_realtime_session_update_uses_twilio_compatible_audio_and_tool() -> None:
+    payload = build_openai_realtime_session_update(realtime_settings(), "crisis only")
+
+    session = payload["session"]
+    assert payload["type"] == "session.update"
+    assert session["instructions"] == "crisis only"
+    assert session["input_audio_format"] == "pcm16"
+    assert session["output_audio_format"] == "g711_ulaw"
+    assert session["tools"][0]["name"] == "crisis_intake_update"
+    assert "caller_tone" in session["tools"][0]["parameters"]["properties"]
+    assert session["tool_choice"] == "auto"
 
 
 @pytest.mark.asyncio
@@ -113,6 +144,50 @@ async def test_openai_provider_connect_send_and_receive_audio_event() -> None:
     assert event is not None
     assert event.event_type == RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED
     assert event.audio_base64 == "abcd"
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_normalizes_transcript_and_tool_events() -> None:
+    fake_socket = FakeProviderSocket(
+        [
+            {"type": "conversation.item.input_audio_transcription.completed", "transcript": "ไฟไหม้ที่หาดใหญ่"},
+            {"type": "response.audio_transcript.delta", "delta": "อยู่ในที่ปลอดภัย"},
+            {
+                "type": "response.function_call_arguments.done",
+                "name": "crisis_intake_update",
+                "arguments": json.dumps(
+                    {
+                        "situation": "fire",
+                        "incident_type": "fire",
+                        "location": "หาดใหญ่",
+                        "people_affected": 2,
+                        "injuries": "smoke",
+                        "immediate_needs": ["fire"],
+                        "caller_phone": "+15550001111",
+                        "language": "th",
+                        "missing_fields": [],
+                        "caller_tone": "urgent",
+                        "recommended_operator_action": "immediate_human_review",
+                    }
+                ),
+            },
+        ]
+    )
+    provider = AzureOpenAIRealtimeProvider(realtime_settings(), websocket_factory=lambda *args, **kwargs: fake_socket)
+
+    await provider.connect(session_id="twilio_CA123", call_id="CA123", instructions="crisis only")
+    caller = await provider.receive_audio_event()
+    assistant = await provider.receive_audio_event()
+    tool = await provider.receive_audio_event()
+
+    assert caller is not None
+    assert caller.event_type == RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED
+    assert caller.text == "ไฟไหม้ที่หาดใหญ่"
+    assert assistant is not None
+    assert assistant.event_type == RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_DELTA
+    assert tool is not None
+    assert tool.event_type == RealtimeAudioEventType.STRUCTURED_EXTRACTION
+    assert tool.metadata["tool_arguments"]["location"] == "หาดใหญ่"
 
 
 @pytest.mark.asyncio

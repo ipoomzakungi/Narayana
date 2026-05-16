@@ -17,6 +17,14 @@ class CrisisCase(TriageResult):
     conversation_summary: str | None = None
     intake_session_id: str | None = None
     intake_audit: list[dict] = Field(default_factory=list)
+    realtime_provider: str | None = None
+    realtime_model_or_deployment: str | None = None
+    realtime_transcript_turns: list[dict] = Field(default_factory=list)
+    caller_tone: str | None = None
+    recommended_operator_action: str | None = None
+    call_started_at: datetime | None = None
+    call_ended_at: datetime | None = None
+    fallback_reason: str | None = None
 
 
 class CreateCaseRequest(BaseModel):
@@ -41,6 +49,15 @@ class CaseRepositoryRecord(BaseModel):
     conversation_summary: str | None = None
     intake_session_id: str | None = None
     intake_audit: list[dict] = Field(default_factory=list)
+    realtime_provider: str | None = None
+    realtime_model_or_deployment: str | None = None
+    realtime_transcript_turns: list[dict] = Field(default_factory=list)
+    caller_tone: str | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+    recommended_operator_action: str | None = None
+    call_started_at: datetime | None = None
+    call_ended_at: datetime | None = None
+    fallback_reason: str | None = None
 
 
 class CaseSnapshotResponse(BaseModel):

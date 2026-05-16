@@ -45,6 +45,15 @@ class LocalCaseRepository:
             conversation_summary=conversation_summary or case.conversation_summary,
             intake_session_id=intake_session_id or case.intake_session_id,
             intake_audit=intake_audit or case.intake_audit,
+            realtime_provider=case.realtime_provider,
+            realtime_model_or_deployment=case.realtime_model_or_deployment,
+            realtime_transcript_turns=case.realtime_transcript_turns,
+            caller_tone=case.caller_tone,
+            missing_fields=case.missing_fields,
+            recommended_operator_action=case.recommended_operator_action,
+            call_started_at=case.call_started_at,
+            call_ended_at=case.call_ended_at,
+            fallback_reason=case.fallback_reason,
         )
         data = self._read()
         data[case.case_id] = record.model_dump(mode="json")

@@ -16,6 +16,7 @@ class ProviderMode(StrEnum):
     MOCK = "mock"
     AZURE_SPEECH_OPENAI = "azure_speech_openai"
     AZURE_VOICE_LIVE = "azure_voice_live"
+    AZURE_OPENAI_REALTIME = "azure_openai_realtime"
 
 
 class IncidentType(StrEnum):

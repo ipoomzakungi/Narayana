@@ -160,10 +160,71 @@ def build_realtime_instructions(settings: Settings) -> str:
     prompt = build_intake_system_prompt(settings)
     return (
         f"{prompt}\n"
-        "Realtime voice mode: respond with short Thai crisis-intake speech only. "
-        "Do not claim rescue has been dispatched. Do not diagnose. "
-        "If uncertain or provider context is insufficient, ask one concise follow-up question or allow fallback."
+        "Realtime voice mode: Thai first. Speak calmly, slowly, concisely, and empathetically. "
+        "Ask exactly one crisis-intake question at a time. Do not chit-chat or answer off-topic questions. "
+        "Never say rescue has been dispatched. Never say an ambulance is on the way. "
+        "Never reveal RED, YELLOW, or GREEN triage labels to the caller. Do not diagnose. "
+        "Escalate human review immediately for breathing difficulty, unconsciousness, severe bleeding, "
+        "trapped people, active drowning, active fire or smoke, self-harm danger, child risk, "
+        "or elderly vulnerable risk. Caller tone is metadata only, not the main triage signal. "
+        "Use the crisis_intake_update tool whenever facts are collected or materially changed."
     )
+
+
+def build_realtime_intake_tool() -> dict[str, Any]:
+    return {
+        "type": "function",
+        "name": "crisis_intake_update",
+        "description": "Record structured facts from the crisis call for human review and case creation.",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "situation": {"type": "string", "description": "Brief situation summary."},
+                "incident_type": {
+                    "type": "string",
+                    "enum": ["flood", "fire", "medical", "accident", "earthquake", "public_safety", "unknown"],
+                },
+                "location": {"type": "string"},
+                "people_affected": {"type": ["integer", "null"], "minimum": 0},
+                "injuries": {"type": "string"},
+                "immediate_needs": {"type": "array", "items": {"type": "string"}},
+                "caller_phone": {"type": ["string", "null"]},
+                "language": {"type": "string"},
+                "missing_fields": {"type": "array", "items": {"type": "string"}},
+                "caller_tone": {"type": "string"},
+                "recommended_operator_action": {"type": "string"},
+            },
+            "required": [
+                "situation",
+                "incident_type",
+                "location",
+                "people_affected",
+                "injuries",
+                "immediate_needs",
+                "caller_phone",
+                "language",
+                "missing_fields",
+                "caller_tone",
+                "recommended_operator_action",
+            ],
+        },
+    }
+
+
+def build_openai_realtime_session_update(settings: Settings, instructions: str) -> dict[str, Any]:
+    return {
+        "type": "session.update",
+        "session": {
+            "instructions": instructions,
+            "modalities": ["audio", "text"],
+            "input_audio_format": "pcm16",
+            "output_audio_format": "g711_ulaw",
+            "turn_detection": {"type": "server_vad"},
+            "tools": [build_realtime_intake_tool()],
+            "tool_choice": "auto",
+        },
+    }
 
 
 def get_realtime_provider(
@@ -224,13 +285,18 @@ def build_openai_realtime_uri(settings: Settings) -> str:
     parsed = urlparse(endpoint)
     host = parsed.netloc or parsed.path
     scheme = "wss"
-    path = "/openai/realtime"
-    query = urlencode(
-        {
-            "api-version": settings.azure_realtime_api_version,
-            "deployment": settings.azure_realtime_deployment,
-        }
-    )
+    api_version = settings.azure_realtime_api_version.strip().lower()
+    if api_version in {"v1", "ga"}:
+        path = "/openai/v1/realtime"
+        query = urlencode({"model": settings.azure_realtime_deployment})
+    else:
+        path = "/openai/realtime"
+        query = urlencode(
+            {
+                "api-version": settings.azure_realtime_api_version,
+                "deployment": settings.azure_realtime_deployment,
+            }
+        )
     return f"{scheme}://{host}{path}?{query}"
 
 

@@ -11,15 +11,17 @@ from fastapi.responses import Response
 
 from app.core.config import get_settings
 from app.models.audio import VadState
-from app.models.intake import ConversationSpeaker
+from app.models.intake import ConversationSpeaker, IntakeAction, IntakeCollectedFields, IntakeRequest
 from app.models.realtime import RealtimeAudioEvent, RealtimeAudioEventType
 from app.models.telephony import CallMetadata, TelephonyCodec, TelephonyProvider, VoiceInputMode
-from app.models.triage import ProviderMode
+from app.models.triage import IncidentType, ProviderMode
 from app.models.tts import TTSProfile
 from app.services.audio_session_processor import AudioSessionProcessor
 from app.services.azure_speech_tts_service import AzureSpeechTTSService
 from app.services.call_audit_logger import append_audit_event, append_realtime_audit_event, log_call_event
 from app.services.call_lifecycle_service import CallLifecycleService, CallLifecycleState
+from app.services.intake_guardrails import evaluate_intake_guardrails
+from app.services.intake_orchestrator import IntakeOrchestrator
 from app.services.intake_session_store import get_intake_session_store
 from app.services.realtime_voice_provider import (
     RealtimeProviderSelection,
@@ -164,6 +166,7 @@ def _realtime_event_payload(
     session_id: str,
     call_id: str,
     provider: str,
+    text: str | None = None,
     latency_ms: int | None = None,
     warnings: list[str] | None = None,
     fallback_reason: str | None = None,
@@ -174,6 +177,7 @@ def _realtime_event_payload(
         "session_id": session_id,
         "call_id": call_id,
         "provider": provider,
+        "text": text,
         "latency_ms": latency_ms,
         "warnings": warnings or [],
         "fallback_reason": fallback_reason,
@@ -188,6 +192,8 @@ def _log_realtime(
     session_id: str,
     call_id: str,
     provider: str,
+    speaker: ConversationSpeaker | None = None,
+    text: str | None = None,
     latency_ms: int | None = None,
     warnings: list[str] | None = None,
     fallback_reason: str | None = None,
@@ -209,6 +215,8 @@ def _log_realtime(
         event_type=event_name,
         provider=provider,
         call_id=call_id,
+        speaker=speaker,
+        text=text,
         latency_ms=latency_ms,
         warnings=warnings,
         fallback_reason=fallback_reason,
@@ -227,6 +235,7 @@ async def _send_realtime_fallback(
     warnings: list[str] | None = None,
     latency_ms: int | None = None,
 ) -> None:
+    _record_realtime_fallback_state(settings=settings, session_id=session_id, reason=reason)
     _log_realtime(
         settings=settings,
         event_type="fallback",
@@ -300,6 +309,269 @@ async def _drain_realtime_events(
     return False
 
 
+def _realtime_model_or_deployment(settings, provider: str) -> str:
+    if provider == "azure_voice_live":
+        return settings.azure_voice_live_model
+    return settings.azure_realtime_deployment
+
+
+def _caller_tone(text: str) -> str:
+    normalized = text.lower()
+    if any(term in normalized for term in ("ช่วยด้วย", "กลัว", "panic", "scared", "screaming")):
+        return "distressed"
+    if any(term in normalized for term in ("ด่วน", "เร็ว", "urgent", "hurry")):
+        return "urgent"
+    return "unknown"
+
+
+def _ensure_realtime_state(
+    *,
+    settings,
+    session_id: str,
+    call_id: str,
+    provider: str,
+    call_started_at: datetime | None = None,
+    caller_phone: str | None = None,
+) -> None:
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.get_or_create(
+        session_id,
+        call_id=call_id,
+        source_input_mode=VoiceInputMode.TWILIO_CALL.value,
+        max_followups=settings.assistant_max_followups,
+    )
+    state.realtime_provider = provider
+    state.realtime_model_or_deployment = _realtime_model_or_deployment(settings, provider)
+    if call_started_at and state.call_started_at is None:
+        state.call_started_at = call_started_at
+    if caller_phone and not state.collected_fields.caller_phone_optional:
+        state.collected_fields.caller_phone_optional = caller_phone
+    store.save(state)
+
+
+def _record_realtime_fallback_state(*, settings, session_id: str, reason: str) -> None:
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.snapshot(session_id)
+    if state is None:
+        return
+    state.fallback_reason = reason
+    store.save(state)
+
+
+def _append_realtime_transcript_turn(
+    *,
+    settings,
+    session_id: str,
+    call_id: str,
+    provider: str,
+    speaker: ConversationSpeaker,
+    text: str,
+    is_delta: bool,
+    metadata: dict | None = None,
+) -> None:
+    clean = text.strip()
+    if not clean:
+        return
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.get_or_create(
+        session_id,
+        call_id=call_id,
+        source_input_mode=VoiceInputMode.TWILIO_CALL.value,
+        max_followups=settings.assistant_max_followups,
+    )
+    state.realtime_provider = provider
+    state.realtime_model_or_deployment = _realtime_model_or_deployment(settings, provider)
+    if speaker == ConversationSpeaker.CALLER:
+        state.caller_tone = _caller_tone(clean)
+    turn = {
+        "speaker": speaker.value,
+        "text": clean,
+        "is_delta": is_delta,
+        "provider": provider,
+        "metadata": metadata or {},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    state.realtime_transcript_turns.append(turn)
+    store.save(state)
+
+
+def _merge_realtime_extraction_into_state(*, settings, session_id: str, arguments: dict) -> None:
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.snapshot(session_id)
+    if state is None:
+        return
+    fields = state.collected_fields.model_copy(deep=True)
+    language = arguments.get("language")
+    if isinstance(language, str) and language.strip():
+        fields.language = language
+    incident_type = arguments.get("incident_type")
+    if isinstance(incident_type, str):
+        try:
+            fields.incident_type = IncidentType(incident_type)
+        except ValueError:
+            fields.incident_type = IncidentType.UNKNOWN
+    location = arguments.get("location")
+    if isinstance(location, str) and location.strip():
+        fields.location_text = location.strip()
+    people_affected = arguments.get("people_affected")
+    if isinstance(people_affected, int) and people_affected >= 0:
+        fields.people_affected = people_affected
+    injuries = arguments.get("injuries")
+    if isinstance(injuries, str) and injuries.strip():
+        fields.injuries = injuries.strip()
+    needs = arguments.get("immediate_needs")
+    if isinstance(needs, list):
+        fields.immediate_needs = [str(item).strip() for item in needs if str(item).strip()]
+    caller_phone = arguments.get("caller_phone")
+    if isinstance(caller_phone, str) and caller_phone.strip():
+        fields.caller_phone_optional = caller_phone.strip()
+    missing = arguments.get("missing_fields")
+    if isinstance(missing, list):
+        fields.missing_fields = [str(item).strip() for item in missing if str(item).strip()]
+    state.collected_fields = IntakeCollectedFields.model_validate(fields.model_dump())
+    caller_tone = arguments.get("caller_tone")
+    if isinstance(caller_tone, str) and caller_tone.strip():
+        state.caller_tone = caller_tone.strip()
+    action = arguments.get("recommended_operator_action")
+    if isinstance(action, str) and action.strip():
+        state.recommended_operator_action = action.strip()
+    store.save(state)
+
+
+def _transcript_from_realtime_extraction(arguments: dict) -> str:
+    parts = [
+        str(arguments.get("situation") or "").strip(),
+        f"incident {arguments.get('incident_type')}" if arguments.get("incident_type") else "",
+        f"ที่ {arguments.get('location')}" if arguments.get("location") else "",
+        f"{arguments.get('people_affected')} คน" if arguments.get("people_affected") is not None else "",
+        str(arguments.get("injuries") or "").strip(),
+        " ".join(str(item) for item in arguments.get("immediate_needs") or []),
+    ]
+    return " ".join(part for part in parts if part).strip() or "ข้อมูลจาก realtime structured extraction"
+
+
+async def _process_realtime_intake_text(
+    *,
+    websocket: WebSocket,
+    settings,
+    session_id: str,
+    call_id: str,
+    text: str,
+    stream_sid: str | None,
+    lifecycle_service: CallLifecycleService | None = None,
+    lifecycle_state: CallLifecycleState | None = None,
+) -> None:
+    clean = text.strip()
+    if not clean:
+        return
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.snapshot(session_id)
+    response = await IntakeOrchestrator(settings).process_transcript(
+        IntakeRequest(
+            session_id=session_id,
+            transcript=clean,
+            language_hint=settings.assistant_language,
+            source_input_mode=VoiceInputMode.TWILIO_CALL.value,
+            call_id=call_id,
+            caller_phone_optional=state.collected_fields.caller_phone_optional if state else None,
+        )
+    )
+    payload = _intake_response_payload(response, transcript=clean)
+    await websocket.send_json(payload)
+    if response.action != IntakeAction.ASK_FOLLOWUP and response.created_case is not None:
+        store = get_intake_session_store(settings.assistant_max_followups)
+        store.mark_final(session_id, response.created_case.case.case_id, response.partial_state.status)
+    await _maybe_send_tts_response(
+        websocket,
+        payload=payload,
+        settings=settings,
+        stream_sid=stream_sid,
+        call_id=call_id,
+        session_id=session_id,
+        lifecycle_service=lifecycle_service,
+        lifecycle_state=lifecycle_state,
+    )
+
+
+def _intake_response_payload(response, *, transcript: str) -> dict:
+    payload: dict = {
+        "type": "intake.followup" if response.action == IntakeAction.ASK_FOLLOWUP else "triage.case.created",
+        "session_id": response.session_id,
+        "transcript": transcript,
+        "provider_mode": ProviderMode.AZURE_OPENAI_REALTIME.value
+        if response.partial_state.realtime_provider == ProviderMode.AZURE_OPENAI_REALTIME.value
+        else (response.partial_state.realtime_provider or "realtime"),
+        "transcript_source": "realtime",
+        "response_text": response.response_text,
+        "warnings": response.guardrail_warnings,
+        "action": response.action.value,
+        "case_group": response.case_group.value,
+        "recommended_team": response.recommended_team,
+        "triage_level": response.triage_level.value,
+        "human_review_required": response.human_review_required,
+        "missing_fields": response.missing_fields,
+        "reason": response.reason,
+        "guardrail_warnings": response.guardrail_warnings,
+        "partial_state": response.partial_state.model_dump(mode="json"),
+        "source_input_mode": VoiceInputMode.TWILIO_CALL.value,
+    }
+    if response.created_case is not None:
+        payload["record"] = response.created_case.model_dump(mode="json")
+        payload["intake"] = {
+            "action": response.action.value,
+            "case_group": response.case_group.value,
+            "recommended_team": response.recommended_team,
+            "missing_fields": response.missing_fields,
+            "reason": response.reason,
+            "guardrail_warnings": response.guardrail_warnings,
+            "partial_state": response.partial_state.model_dump(mode="json"),
+        }
+    return payload
+
+
+async def _finalize_realtime_call(
+    *,
+    websocket: WebSocket,
+    settings,
+    session_id: str,
+    call_id: str,
+    stream_sid: str | None,
+) -> None:
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.snapshot(session_id)
+    if state is None:
+        return
+    state.call_ended_at = datetime.now(timezone.utc)
+    store.save(state)
+    if state.final_case_id:
+        return
+    final_caller_turns = [
+        turn.get("text", "")
+        for turn in state.realtime_transcript_turns
+        if turn.get("speaker") == ConversationSpeaker.CALLER.value and not turn.get("is_delta")
+    ]
+    if not final_caller_turns:
+        final_caller_turns = [
+            turn.get("text", "")
+            for turn in state.realtime_transcript_turns
+            if turn.get("speaker") == ConversationSpeaker.CALLER.value
+        ]
+    caller_text = " ".join(final_caller_turns).strip()
+    if not caller_text:
+        return
+    guardrails = evaluate_intake_guardrails(caller_text, state)
+    if not guardrails.forced_human_review and not guardrails.forced_triage_level:
+        return
+    await _process_realtime_intake_text(
+        websocket=websocket,
+        settings=settings,
+        session_id=session_id,
+        call_id=call_id,
+        text=caller_text,
+        stream_sid=stream_sid,
+    )
+
+
 async def _handle_realtime_event(
     websocket: WebSocket,
     *,
@@ -335,12 +607,25 @@ async def _handle_realtime_event(
         return True
 
     event_type = event.event_type.value
+    speaker = None
+    if event.event_type in {
+        RealtimeAudioEventType.CALLER_TRANSCRIPT_DELTA,
+        RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED,
+    }:
+        speaker = ConversationSpeaker.CALLER
+    elif event.event_type in {
+        RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_DELTA,
+        RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_COMPLETED,
+    }:
+        speaker = ConversationSpeaker.ASSISTANT
     _log_realtime(
         settings=settings,
         event_type=event_type,
         session_id=session_id,
         call_id=call_id,
         provider=provider,
+        speaker=speaker,
+        text=event.text,
         latency_ms=event.latency_ms,
         warnings=event.warnings,
         metadata=event.metadata,
@@ -351,11 +636,48 @@ async def _handle_realtime_event(
             session_id=session_id,
             call_id=call_id,
             provider=provider,
+            text=event.text,
             latency_ms=event.latency_ms,
             warnings=event.warnings,
             metadata=event.metadata,
         )
     )
+    if speaker is not None and event.text:
+        is_delta = event.event_type in {
+            RealtimeAudioEventType.CALLER_TRANSCRIPT_DELTA,
+            RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_DELTA,
+        }
+        _append_realtime_transcript_turn(
+            settings=settings,
+            session_id=session_id,
+            call_id=call_id,
+            provider=provider,
+            speaker=speaker,
+            text=event.text,
+            is_delta=is_delta,
+            metadata=event.metadata,
+        )
+        if event.event_type == RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED:
+            await _process_realtime_intake_text(
+                websocket=websocket,
+                settings=settings,
+                session_id=session_id,
+                call_id=call_id,
+                text=event.text,
+                stream_sid=stream_sid,
+            )
+    if event.event_type == RealtimeAudioEventType.STRUCTURED_EXTRACTION:
+        arguments = event.metadata.get("tool_arguments") if isinstance(event.metadata, dict) else {}
+        if isinstance(arguments, dict):
+            _merge_realtime_extraction_into_state(settings=settings, session_id=session_id, arguments=arguments)
+            await _process_realtime_intake_text(
+                websocket=websocket,
+                settings=settings,
+                session_id=session_id,
+                call_id=call_id,
+                text=_transcript_from_realtime_extraction(arguments),
+                stream_sid=stream_sid,
+            )
     if event.event_type == RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED and event.audio_base64:
         if not stream_sid:
             await _send_realtime_fallback(
@@ -777,6 +1099,15 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                     call_metadata=metadata,
                 )
                 lifecycle_state = CallLifecycleState(session_id=session_id, call_id=metadata.call_id)
+                if realtime_selection.enabled:
+                    _ensure_realtime_state(
+                        settings=settings,
+                        session_id=session_id,
+                        call_id=call_id,
+                        provider=realtime_selection.provider_mode.value,
+                        call_started_at=metadata.started_at,
+                        caller_phone=metadata.from_number,
+                    )
                 await websocket.send_json(
                     {
                         "type": "session.started",
@@ -1001,6 +1332,14 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
 
             if event == "stop":
                 log_call_event(logger, "call.closed", session_id=session_id, call_id=call_id, metadata={"reason": "twilio_stop"})
+                if realtime_selection.enabled:
+                    await _finalize_realtime_call(
+                        websocket=websocket,
+                        settings=settings,
+                        session_id=session_id,
+                        call_id=call_id,
+                        stream_sid=stream_sid,
+                    )
                 if realtime_provider is not None:
                     await realtime_provider.close()
                 await websocket.send_json({"type": "session.closed", "session_id": session_id})

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from app.core.config import Settings
 from app.models.audio import AudioFrame
 from app.models.realtime import (
@@ -14,6 +16,7 @@ from app.services.realtime_voice_provider import (
     BaseRealtimeProvider,
     WebSocketFactory,
     auth_headers,
+    build_openai_realtime_session_update,
     build_openai_realtime_uri,
 )
 
@@ -31,18 +34,7 @@ class AzureOpenAIRealtimeProvider(BaseRealtimeProvider):
         tracker.start("connect")
         try:
             self.websocket = await self._open_websocket(build_openai_realtime_uri(self.settings), auth_headers(self.settings))
-            await self._send_json(
-                {
-                    "type": "session.update",
-                    "session": {
-                        "instructions": instructions,
-                        "modalities": ["audio", "text"],
-                        "input_audio_format": "pcm16",
-                        "output_audio_format": "g711_ulaw",
-                        "turn_detection": {"type": "server_vad"},
-                    },
-                }
-            )
+            await self._send_json(build_openai_realtime_session_update(self.settings, instructions))
         except Exception as exc:
             await self.close()
             sample = tracker.sample("connect", metadata={"reason": "connect_failed"})
@@ -111,6 +103,47 @@ class AzureOpenAIRealtimeProvider(BaseRealtimeProvider):
                 audio_format=RealtimeAudioFormat.MULAW_8KHZ,
                 metadata={"provider_event_type": event_type},
             )
+        if event_type in {
+            "conversation.item.input_audio_transcription.delta",
+            "input_audio_buffer.transcription.delta",
+            "input_audio_transcription.delta",
+        }:
+            return self._transcript_event(
+                RealtimeAudioEventType.CALLER_TRANSCRIPT_DELTA,
+                message,
+                provider_event_type=event_type,
+            )
+        if event_type in {
+            "conversation.item.input_audio_transcription.completed",
+            "input_audio_buffer.transcription.completed",
+            "input_audio_transcription.completed",
+        }:
+            return self._transcript_event(
+                RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED,
+                message,
+                provider_event_type=event_type,
+            )
+        if event_type in {"response.audio_transcript.delta", "response.output_audio_transcript.delta", "response.text.delta"}:
+            return self._transcript_event(
+                RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_DELTA,
+                message,
+                provider_event_type=event_type,
+            )
+        if event_type in {
+            "response.audio_transcript.done",
+            "response.output_audio_transcript.done",
+            "response.text.done",
+            "response.audio_transcript.completed",
+        }:
+            return self._transcript_event(
+                RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_COMPLETED,
+                message,
+                provider_event_type=event_type,
+            )
+        if event_type in {"response.function_call_arguments.done", "response.output_item.done"}:
+            tool_event = self._tool_event(message, event_type=event_type)
+            if tool_event is not None:
+                return tool_event
         if event_type == "error":
             error = message.get("error") if isinstance(message.get("error"), dict) else {}
             return self._event(
@@ -120,3 +153,47 @@ class AzureOpenAIRealtimeProvider(BaseRealtimeProvider):
                 metadata={"provider_event_type": event_type},
             )
         return None
+
+    def _transcript_event(
+        self,
+        normalized_type: RealtimeAudioEventType,
+        message: dict,
+        *,
+        provider_event_type: str,
+    ) -> RealtimeAudioEvent | None:
+        text = message.get("transcript") or message.get("delta") or message.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return None
+        return self._event(
+            normalized_type,
+            text=text,
+            metadata={"provider_event_type": provider_event_type, "item_id": message.get("item_id")},
+        )
+
+    def _tool_event(self, message: dict, *, event_type: str) -> RealtimeAudioEvent | None:
+        item = message.get("item") if isinstance(message.get("item"), dict) else {}
+        tool_name = message.get("name") or item.get("name")
+        if tool_name != "crisis_intake_update":
+            return None
+        raw_arguments = message.get("arguments") or item.get("arguments") or "{}"
+        arguments = _parse_tool_arguments(raw_arguments)
+        return self._event(
+            RealtimeAudioEventType.STRUCTURED_EXTRACTION,
+            metadata={
+                "provider_event_type": event_type,
+                "tool_name": tool_name,
+                "tool_arguments": arguments,
+            },
+        )
+
+
+def _parse_tool_arguments(raw_arguments) -> dict:
+    if isinstance(raw_arguments, dict):
+        return raw_arguments
+    if not isinstance(raw_arguments, str) or not raw_arguments.strip():
+        return {}
+    try:
+        parsed = json.loads(raw_arguments)
+    except json.JSONDecodeError:
+        return {"raw_arguments": raw_arguments}
+    return parsed if isinstance(parsed, dict) else {}

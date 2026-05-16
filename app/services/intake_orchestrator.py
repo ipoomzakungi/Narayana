@@ -282,43 +282,67 @@ class IntakeOrchestrator:
     async def _create_case(self, state: IntakeSessionState, decision: IntakeDecision):
         fields = state.collected_fields
         summary = _conversation_summary(state)
-        case = CrisisCase(
-            language=fields.language,
-            incident_type=fields.incident_type or IncidentType.UNKNOWN,
-            triage_level=decision.triage_level,
-            confidence=decision.confidence,
-            location_text=fields.location_text,
-            people_affected=fields.people_affected,
-            injuries=fields.injuries,
-            immediate_needs=fields.immediate_needs or [decision.case_group.value],
-            caller_phone_optional=fields.caller_phone_optional,
-            ai_summary=summary or "Crisis intake conversation requires operator review.",
-            triage_reason=decision.reason,
-            human_review_required=decision.human_review_required,
-            missing_fields=decision.missing_fields,
-            status=CaseStatus.PENDING,
-            case_group=decision.case_group.value,
-            recommended_team=decision.recommended_team,
-            conversation_summary=summary,
-            intake_session_id=state.session_id,
-            intake_audit=[
+        recommended_operator_action = state.recommended_operator_action or (
+            "immediate_human_review"
+            if decision.human_review_required or decision.triage_level == TriageLevel.RED
+            else "operator_review"
+        )
+        case_payload = {
+            "language": fields.language,
+            "incident_type": fields.incident_type or IncidentType.UNKNOWN,
+            "triage_level": decision.triage_level,
+            "confidence": decision.confidence,
+            "location_text": fields.location_text,
+            "people_affected": fields.people_affected,
+            "injuries": fields.injuries,
+            "immediate_needs": fields.immediate_needs or [decision.case_group.value],
+            "caller_phone_optional": fields.caller_phone_optional,
+            "ai_summary": summary or "Crisis intake conversation requires operator review.",
+            "triage_reason": decision.reason,
+            "human_review_required": decision.human_review_required,
+            "missing_fields": decision.missing_fields,
+            "status": CaseStatus.PENDING,
+            "case_group": decision.case_group.value,
+            "recommended_team": decision.recommended_team,
+            "conversation_summary": summary,
+            "intake_session_id": state.session_id,
+            "realtime_provider": state.realtime_provider,
+            "realtime_model_or_deployment": state.realtime_model_or_deployment,
+            "realtime_transcript_turns": state.realtime_transcript_turns,
+            "caller_tone": state.caller_tone,
+            "recommended_operator_action": recommended_operator_action,
+            "call_started_at": state.call_started_at,
+            "call_ended_at": state.call_ended_at,
+            "fallback_reason": state.fallback_reason,
+            "intake_audit": [
                 *state.decision_audit,
                 {
                     "action": decision.action.value,
                     "reason": decision.reason,
                     "guardrail_warnings": decision.guardrail_warnings,
                     "missing_fields": decision.missing_fields,
+                    "realtime_provider": state.realtime_provider,
+                    "realtime_model_or_deployment": state.realtime_model_or_deployment,
+                    "caller_tone": state.caller_tone,
+                    "recommended_operator_action": recommended_operator_action,
+                    "call_started_at": state.call_started_at.isoformat() if state.call_started_at else None,
+                    "call_ended_at": state.call_ended_at.isoformat() if state.call_ended_at else None,
+                    "fallback_reason": state.fallback_reason,
                 },
             ],
-        )
+        }
+        if state.final_case_id:
+            case_payload["case_id"] = state.final_case_id
+        case = CrisisCase(**case_payload)
         safe_case = CrisisCase.model_validate(
             apply_safety_rules(case, self.settings.low_confidence_threshold).model_dump()
         )
         repository = get_case_repository(self.settings)
+        source_provider = _source_provider_for_state(state, self.settings)
         return await repository.create(
             case=safe_case,
             session_id=state.session_id,
-            source_provider=ProviderMode(self.settings.selected_provider),
+            source_provider=source_provider,
             case_group=decision.case_group.value,
             recommended_team=decision.recommended_team,
             conversation_summary=summary,
@@ -364,3 +388,11 @@ def _conversation_summary(state: IntakeSessionState) -> str:
     if not caller_turns:
         return ""
     return " | ".join(caller_turns)[-500:]
+
+
+def _source_provider_for_state(state: IntakeSessionState, settings: Settings) -> ProviderMode:
+    if state.realtime_provider == ProviderMode.AZURE_OPENAI_REALTIME.value:
+        return ProviderMode.AZURE_OPENAI_REALTIME
+    if state.realtime_provider == ProviderMode.AZURE_VOICE_LIVE.value:
+        return ProviderMode.AZURE_VOICE_LIVE
+    return ProviderMode(settings.selected_provider)

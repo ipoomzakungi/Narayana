@@ -8,6 +8,7 @@ from app.main import create_app
 from app.services.call_lifecycle_service import CallLifecycleService, CallLifecycleState
 from app.models.realtime import RealtimeAudioEvent, RealtimeAudioEventType, RealtimeAudioFormat, RealtimeProviderMode
 from app.models.tts import TTSProfile, TTSResult
+from app.services.intake_session_store import get_intake_session_store
 
 
 def test_twilio_webhook_returns_config_error_without_public_base_url(monkeypatch) -> None:
@@ -419,3 +420,60 @@ async def test_handle_realtime_error_sends_fallback_and_logs(caplog) -> None:
     assert websocket.sent[0]["fallback_reason"] == "provider_error"
     assert "realtime.error" in caplog.text
     assert "realtime.fallback" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_handle_realtime_transcript_creates_case(tmp_path) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    websocket = FakeWebSocket()
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        text="ไฟไหม้ที่หาดใหญ่ มีควันไฟ มีคนบาดเจ็บ 2 คน",
+    )
+
+    fallback = await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=Settings(
+            use_mock_services=True,
+            enable_realtime_voice=True,
+            realtime_provider="azure_openai_realtime",
+            azure_realtime_deployment="gpt-realtime",
+            case_store_path=str(tmp_path / "cases.json"),
+        ),
+        event=event,
+        stream_sid="MZ123",
+        session_id="twilio_CA_REALTIME_CASE",
+        call_id="CA_REALTIME_CASE",
+    )
+
+    assert fallback is False
+    assert websocket.sent[0]["type"] == "realtime.transcript.caller.completed"
+    case_payload = next(message for message in websocket.sent if message.get("type") == "triage.case.created")
+    assert case_payload["record"]["source_provider"] == "azure_openai_realtime"
+    assert case_payload["record"]["case"]["realtime_provider"] == "azure_openai_realtime"
+    assert case_payload["record"]["case"]["realtime_model_or_deployment"] == "gpt-realtime"
+    assert case_payload["record"]["case"]["caller_tone"] in {"unknown", "urgent", "distressed"}
+    assert case_payload["record"]["case"]["recommended_operator_action"] == "immediate_human_review"
+    assert case_payload["record"]["case"]["realtime_transcript_turns"][0]["text"] == event.text
+
+
+def test_realtime_logging_redacts_raw_audio_and_secrets(caplog) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    with caplog.at_level("INFO", logger="app.api.routes_twilio"):
+        routes_twilio._log_realtime(
+            settings=Settings(call_audit_enabled=True),
+            event_type="audio.output.received",
+            session_id="twilio_CA123",
+            call_id="CA123",
+            provider="azure_openai_realtime",
+            metadata={"audio_base64": "AAAA", "api_key": "secret", "safe": "ok"},
+        )
+
+    assert "AAAA" not in caplog.text
+    assert "secret" not in caplog.text
+    assert "[AUDIO_REDACTED]" in caplog.text
+    assert "[REDACTED]" in caplog.text
