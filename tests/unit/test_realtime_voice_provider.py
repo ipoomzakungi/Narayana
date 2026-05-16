@@ -83,6 +83,21 @@ def test_openai_realtime_uri_uses_ga_model_format_when_requested() -> None:
         )
     )
 
+
+def realtime_g711_settings(provider: str = "azure_openai_realtime") -> Settings:
+    return Settings(
+        enable_realtime_voice=True,
+        realtime_provider=provider,
+        azure_realtime_endpoint="https://aoai.example.openai.azure.com",
+        azure_realtime_api_key="dummy-key",
+        azure_realtime_deployment="gpt-realtime",
+        azure_realtime_api_version="2025-04-01-preview",
+        azure_voice_live_endpoint="wss://voice.example/voice-live/realtime?api-version=2025-10-01",
+        azure_voice_live_model="gpt-realtime",
+        realtime_input_audio_format="g711_ulaw",
+        realtime_twilio_audio_passthrough=True,
+    )
+
     assert uri == "wss://aoai.example.openai.azure.com/openai/v1/realtime?model=gpt-realtime-1.5-prod"
 
 
@@ -128,6 +143,12 @@ def test_openai_realtime_session_update_uses_twilio_compatible_audio_and_tool() 
     assert session["tool_choice"] == "auto"
 
 
+def test_realtime_session_update_can_select_g711_ulaw_input() -> None:
+    payload = build_openai_realtime_session_update(realtime_g711_settings(), "crisis only")
+
+    assert payload["session"]["input_audio_format"] == "g711_ulaw"
+
+
 @pytest.mark.asyncio
 async def test_openai_provider_connect_send_and_receive_audio_event() -> None:
     fake_socket = FakeProviderSocket([{"type": "response.audio.delta", "delta": "abcd"}])
@@ -144,6 +165,35 @@ async def test_openai_provider_connect_send_and_receive_audio_event() -> None:
     assert event is not None
     assert event.event_type == RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED
     assert event.audio_base64 == "abcd"
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_sends_safe_tool_result_response() -> None:
+    fake_socket = FakeProviderSocket()
+    provider = AzureOpenAIRealtimeProvider(realtime_settings(), websocket_factory=lambda *args, **kwargs: fake_socket)
+
+    await provider.connect(session_id="twilio_CA123", call_id="CA123", instructions="crisis only")
+    result = await provider.send_tool_result(
+        tool_call_id="call_123",
+        result={
+            "status": "case_created",
+            "missing_fields": [],
+            "human_review_required": True,
+            "case_id": "case_123",
+        },
+    )
+
+    assert result.sent is True
+    assert fake_socket.sent[1]["type"] == "conversation.item.create"
+    assert fake_socket.sent[1]["item"]["type"] == "function_call_output"
+    assert fake_socket.sent[1]["item"]["call_id"] == "call_123"
+    assert json.loads(fake_socket.sent[1]["item"]["output"]) == {
+        "status": "case_created",
+        "missing_fields": [],
+        "human_review_required": True,
+        "case_id": "case_123",
+    }
+    assert fake_socket.sent[2] == {"type": "response.create"}
 
 
 @pytest.mark.asyncio
@@ -170,6 +220,7 @@ async def test_openai_provider_normalizes_transcript_and_tool_events() -> None:
                         "recommended_operator_action": "immediate_human_review",
                     }
                 ),
+                "call_id": "call_abc",
             },
         ]
     )
@@ -187,7 +238,31 @@ async def test_openai_provider_normalizes_transcript_and_tool_events() -> None:
     assert assistant.event_type == RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_DELTA
     assert tool is not None
     assert tool.event_type == RealtimeAudioEventType.STRUCTURED_EXTRACTION
+    assert tool.metadata["tool_call_id"] == "call_abc"
     assert tool.metadata["tool_arguments"]["location"] == "หาดใหญ่"
+
+
+@pytest.mark.asyncio
+async def test_unknown_provider_event_type_is_normalized_without_raw_payload_or_secret() -> None:
+    fake_socket = FakeProviderSocket(
+        [
+            {
+                "type": "provider.unexpected",
+                "audio": "raw-audio",
+                "api_key": "secret-key",
+            },
+        ]
+    )
+    provider = AzureOpenAIRealtimeProvider(realtime_settings(), websocket_factory=lambda *args, **kwargs: fake_socket)
+
+    await provider.connect(session_id="twilio_CA123", call_id="CA123", instructions="crisis only")
+    event = await provider.receive_audio_event()
+
+    assert event is not None
+    assert event.event_type == RealtimeAudioEventType.UNKNOWN_PROVIDER_EVENT
+    assert event.metadata == {"provider_event_type": "provider.unexpected"}
+    assert "raw-audio" not in str(event.metadata)
+    assert "secret-key" not in str(event.metadata)
 
 
 @pytest.mark.asyncio

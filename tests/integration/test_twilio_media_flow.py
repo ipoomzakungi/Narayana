@@ -278,6 +278,7 @@ def test_twilio_realtime_mocked_provider_streams_audio_output(monkeypatch) -> No
         mode = RealtimeProviderMode.AZURE_OPENAI_REALTIME
 
         def __init__(self) -> None:
+            self.sent_frames = []
             self.events = [
                 RealtimeAudioEvent(
                     event_type=RealtimeAudioEventType.RESPONSE_STARTED,
@@ -306,6 +307,7 @@ def test_twilio_realtime_mocked_provider_streams_audio_output(monkeypatch) -> No
         async def send_audio_frame(self, frame):
             from app.models.realtime import RealtimeSendResult
 
+            self.sent_frames.append(frame)
             return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=3)
 
         async def receive_audio_event(self):
@@ -326,6 +328,8 @@ def test_twilio_realtime_mocked_provider_streams_audio_output(monkeypatch) -> No
             azure_realtime_api_key="key",
             azure_realtime_deployment="gpt-realtime",
             azure_realtime_api_version="2025-04-01-preview",
+            realtime_input_audio_format="g711_ulaw",
+            realtime_twilio_audio_passthrough=True,
         ),
     )
     monkeypatch.setattr(
@@ -361,6 +365,8 @@ def test_twilio_realtime_mocked_provider_streams_audio_output(monkeypatch) -> No
     assert any(message.get("type") == "realtime.audio.input.sent" for message in messages)
     assert any(message.get("type") == "realtime.audio.output.received" for message in messages)
     assert any(message == {"event": "media", "streamSid": "MZ_REALTIME", "media": {"payload": "abcd"}} for message in messages)
+    assert fake_provider.sent_frames[0].encoding == "g711_ulaw"
+    assert fake_provider.sent_frames[0].audio_base64 == media(2, 24000)["media"]["payload"]
 
 
 def test_twilio_start_sends_initial_greeting_media_and_mark(monkeypatch) -> None:

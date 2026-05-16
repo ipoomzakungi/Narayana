@@ -39,7 +39,7 @@ class AzureVoiceLiveRealtimeProvider(BaseRealtimeProvider):
                     "session": {
                         "instructions": instructions,
                         "turn_detection": {"type": "azure_semantic_vad", "silence_duration_ms": 500},
-                        "input_audio_format": "pcm16",
+                        "input_audio_format": self.settings.effective_realtime_input_audio_format,
                         "output_audio_format": "g711_ulaw",
                         "voice": {"name": self.settings.azure_speech_voice, "type": "azure-standard"},
                         "tools": [build_realtime_intake_tool()],
@@ -158,7 +158,10 @@ class AzureVoiceLiveRealtimeProvider(BaseRealtimeProvider):
                 warnings=[str(error.get("message") or "Azure Voice Live returned an error.")],
                 metadata={"provider_event_type": event_type},
             )
-        return None
+        return self._event(
+            RealtimeAudioEventType.UNKNOWN_PROVIDER_EVENT,
+            metadata={"provider_event_type": event_type or "missing"},
+        )
 
     def _transcript_event(
         self,
@@ -182,11 +185,13 @@ class AzureVoiceLiveRealtimeProvider(BaseRealtimeProvider):
         if tool_name != "crisis_intake_update":
             return None
         raw_arguments = message.get("arguments") or item.get("arguments") or "{}"
+        tool_call_id = message.get("call_id") or item.get("call_id") or message.get("item_id") or item.get("id")
         return self._event(
             RealtimeAudioEventType.STRUCTURED_EXTRACTION,
             metadata={
                 "provider_event_type": event_type,
                 "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
                 "tool_arguments": _parse_tool_arguments(raw_arguments),
             },
         )

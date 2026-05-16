@@ -75,6 +75,7 @@ class IntakeOrchestrator:
         state.guardrail_warnings = _merge_unique(state.guardrail_warnings, decision.guardrail_warnings)
 
         created_case = None
+        case_event_type = "triage.case.created"
         if decision.action == IntakeAction.ASK_FOLLOWUP:
             state.followup_count += 1
             state.status = IntakeSessionStatus.WAITING_FOR_FOLLOWUP
@@ -95,6 +96,7 @@ class IntakeOrchestrator:
             )
             self.store.save(state)
         else:
+            case_event_type = "case.updated" if state.final_case_id else "triage.case.created"
             self.store.append_assistant_turn(request.session_id, decision.response_text)
             self.store.update_state(request.session_id, decision)
             created_case = await self._create_case(state, decision)
@@ -115,7 +117,7 @@ class IntakeOrchestrator:
                 self.store,
                 self.settings,
                 request.session_id,
-                event_type="triage.case.created",
+                event_type=case_event_type,
                 triage_level=decision.triage_level,
                 case_group=decision.case_group.value,
                 recommended_team=decision.recommended_team,
@@ -153,6 +155,7 @@ class IntakeOrchestrator:
             call_end_reason=state.call_end_reason,
             last_assistant_redirect=state.last_assistant_redirect,
             created_case=created_case,
+            case_event_type=case_event_type,
         )
 
     def _off_topic_response(self, state: IntakeSessionState, scope) -> IntakeResponse:

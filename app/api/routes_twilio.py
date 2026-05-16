@@ -35,6 +35,7 @@ from app.services.twilio_audio_service import (
     build_twilio_mark_event,
     build_twilio_media_event,
     normalize_twilio_media_message,
+    passthrough_twilio_media_message,
     twilio_call_metadata,
 )
 
@@ -158,6 +159,30 @@ def _with_tts_debug_metadata(payload: dict, settings, stream_sid: str | None) ->
 
 def _realtime_debug_payload(selection: RealtimeProviderSelection) -> dict:
     return selection.debug_payload()
+
+
+def _realtime_frame_from_twilio_message(
+    message: dict,
+    *,
+    settings,
+    session_id: str,
+    metadata: CallMetadata,
+    assistant_is_speaking: bool,
+):
+    if settings.realtime_input_audio_passthrough_enabled:
+        return passthrough_twilio_media_message(
+            message,
+            session_id=session_id,
+            sample_rate_hz=metadata.sample_rate,
+            assistant_is_speaking=assistant_is_speaking,
+        )
+    return normalize_twilio_media_message(
+        message,
+        session_id=session_id,
+        sample_rate_hz=metadata.sample_rate,
+        codec=metadata.codec,
+        assistant_is_speaking=assistant_is_speaking,
+    )
 
 
 def _realtime_event_payload(
@@ -299,6 +324,7 @@ async def _drain_realtime_events(
         fallback = await _handle_realtime_event(
             websocket,
             settings=settings,
+            provider_client=provider,
             event=event,
             stream_sid=stream_sid,
             session_id=session_id,
@@ -493,9 +519,57 @@ async def _process_realtime_intake_text(
     )
 
 
+def _safe_realtime_tool_result(settings, session_id: str) -> dict:
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.snapshot(session_id)
+    if state is None:
+        return {
+            "status": "unknown",
+            "missing_fields": [],
+            "human_review_required": True,
+        }
+    result = {
+        "status": state.status.value,
+        "missing_fields": list(state.collected_fields.missing_fields),
+        "human_review_required": bool(state.human_review_required),
+    }
+    if state.final_case_id:
+        result["case_id"] = state.final_case_id
+    return result
+
+
+async def _send_realtime_tool_result(
+    *,
+    provider_client: RealtimeVoiceProvider | None,
+    settings,
+    event: RealtimeAudioEvent,
+    session_id: str,
+    call_id: str,
+) -> None:
+    if provider_client is None or not hasattr(provider_client, "send_tool_result"):
+        return
+    result = _safe_realtime_tool_result(settings, session_id)
+    tool_call_id = event.metadata.get("tool_call_id") if isinstance(event.metadata, dict) else None
+    send_result = await provider_client.send_tool_result(
+        tool_call_id=str(tool_call_id) if tool_call_id else None,
+        result=result,
+    )
+    _log_realtime(
+        settings=settings,
+        event_type="tool.result.sent" if send_result.sent else "tool.result.failed",
+        session_id=session_id,
+        call_id=call_id,
+        provider=send_result.provider.value,
+        latency_ms=send_result.latency_ms,
+        warnings=send_result.warnings,
+        fallback_reason=send_result.fallback_reason,
+        metadata={"tool_result": result, "tool_call_id": tool_call_id},
+    )
+
+
 def _intake_response_payload(response, *, transcript: str) -> dict:
     payload: dict = {
-        "type": "intake.followup" if response.action == IntakeAction.ASK_FOLLOWUP else "triage.case.created",
+        "type": "intake.followup" if response.action == IntakeAction.ASK_FOLLOWUP else response.case_event_type,
         "session_id": response.session_id,
         "transcript": transcript,
         "provider_mode": ProviderMode.AZURE_OPENAI_REALTIME.value
@@ -576,12 +650,14 @@ async def _handle_realtime_event(
     websocket: WebSocket,
     *,
     settings,
+    provider_client: RealtimeVoiceProvider | None = None,
     event: RealtimeAudioEvent,
     stream_sid: str | None,
     session_id: str,
     call_id: str,
 ) -> bool:
     provider = event.provider.value
+    _ensure_realtime_state(settings=settings, session_id=session_id, call_id=call_id, provider=provider)
     if event.event_type == RealtimeAudioEventType.ERROR:
         _log_realtime(
             settings=settings,
@@ -677,6 +753,13 @@ async def _handle_realtime_event(
                 call_id=call_id,
                 text=_transcript_from_realtime_extraction(arguments),
                 stream_sid=stream_sid,
+            )
+            await _send_realtime_tool_result(
+                provider_client=provider_client,
+                settings=settings,
+                event=event,
+                session_id=session_id,
+                call_id=call_id,
             )
     if event.event_type == RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED and event.audio_base64:
         if not stream_sid:
@@ -1238,19 +1321,20 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
 
             if event == "media":
                 lifecycle_service.maybe_complete_expired_playback(lifecycle_state)
-                try:
-                    frame = normalize_twilio_media_message(
-                        message,
-                        session_id=session_id,
-                        sample_rate_hz=metadata.sample_rate,
-                        codec=metadata.codec,
-                        assistant_is_speaking=lifecycle_state.assistant_speaking,
-                    )
-                except TwilioMediaError as exc:
-                    await websocket.send_json({"type": "error", "detail": str(exc)})
-                    continue
+                frame = None
                 if realtime_active and realtime_provider is not None:
-                    send_result = await realtime_provider.send_audio_frame(frame)
+                    try:
+                        realtime_frame = _realtime_frame_from_twilio_message(
+                            message,
+                            settings=settings,
+                            session_id=session_id,
+                            metadata=metadata,
+                            assistant_is_speaking=lifecycle_state.assistant_speaking,
+                        )
+                    except TwilioMediaError as exc:
+                        await websocket.send_json({"type": "error", "detail": str(exc)})
+                        continue
+                    send_result = await realtime_provider.send_audio_frame(realtime_frame)
                     if send_result.sent:
                         _log_realtime(
                             settings=settings,
@@ -1260,7 +1344,10 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                             provider=send_result.provider.value,
                             latency_ms=send_result.latency_ms,
                             warnings=send_result.warnings,
-                            metadata={"sequence": frame.sequence},
+                            metadata={
+                                "sequence": realtime_frame.sequence,
+                                "audio_format": realtime_frame.encoding,
+                            },
                         )
                         await websocket.send_json(
                             _realtime_event_payload(
@@ -1270,7 +1357,10 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                                 provider=send_result.provider.value,
                                 latency_ms=send_result.latency_ms,
                                 warnings=send_result.warnings,
-                                metadata={"sequence": frame.sequence},
+                                metadata={
+                                    "sequence": realtime_frame.sequence,
+                                    "audio_format": realtime_frame.encoding,
+                                },
                             )
                         )
                         fallback_to_current = await _drain_realtime_events(
@@ -1297,6 +1387,17 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                     realtime_active = False
                     await realtime_provider.close()
                     realtime_provider = None
+                try:
+                    frame = normalize_twilio_media_message(
+                        message,
+                        session_id=session_id,
+                        sample_rate_hz=metadata.sample_rate,
+                        codec=metadata.codec,
+                        assistant_is_speaking=lifecycle_state.assistant_speaking,
+                    )
+                except TwilioMediaError as exc:
+                    await websocket.send_json({"type": "error", "detail": str(exc)})
+                    continue
                 processed_payloads = await processor.process_frame(frame)
                 if any(
                     payload.get("type") == "debug.event"
@@ -1313,7 +1414,10 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         session_id=session_id,
                         metadata={"sequence": frame.sequence},
                     )
-                if any(payload.get("type") in {"intake.followup", "triage.case.created"} for payload in processed_payloads):
+                if any(
+                    payload.get("type") in {"intake.followup", "triage.case.created", "case.updated"}
+                    for payload in processed_payloads
+                ):
                     lifecycle_service.track_caller_speech(lifecycle_state)
                 for payload in processed_payloads:
                     payload = _with_tts_debug_metadata(payload, settings, stream_sid)

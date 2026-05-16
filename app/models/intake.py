@@ -238,6 +238,7 @@ class IntakeResponse(BaseModel):
     call_end_reason: str = ""
     last_assistant_redirect: str = ""
     created_case: CaseRepositoryRecord | None = None
+    case_event_type: str = "triage.case.created"
 
     @model_validator(mode="after")
     def validate_created_case(self) -> "IntakeResponse":

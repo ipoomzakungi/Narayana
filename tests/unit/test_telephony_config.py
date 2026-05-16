@@ -61,6 +61,10 @@ def test_telephony_defaults_keep_local_mic_and_no_provider() -> None:
     assert settings.enable_realtime_voice is False
     assert settings.realtime_provider == "none"
     assert settings.normalized_realtime_provider == "none"
+    assert settings.normalized_realtime_input_audio_format == "pcm16"
+    assert settings.effective_realtime_input_audio_format == "pcm16"
+    assert settings.realtime_twilio_audio_passthrough is False
+    assert settings.realtime_input_audio_passthrough_enabled is False
     assert settings.realtime_configured is False
     assert settings.azure_openai_realtime_configured is False
     assert settings.azure_voice_live_realtime_configured is False
@@ -134,6 +138,8 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     monkeypatch.setenv("AZURE_REALTIME_API_KEY", "realtime-key")
     monkeypatch.setenv("AZURE_REALTIME_DEPLOYMENT", "gpt-realtime")
     monkeypatch.setenv("AZURE_REALTIME_API_VERSION", "2025-04-01-preview")
+    monkeypatch.setenv("REALTIME_INPUT_AUDIO_FORMAT", "g711_ulaw")
+    monkeypatch.setenv("REALTIME_TWILIO_AUDIO_PASSTHROUGH", "true")
     reset_settings_cache()
 
     settings = Settings.from_env()
@@ -176,6 +182,9 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     assert settings.normalized_realtime_provider == "azure_openai_realtime"
     assert settings.azure_openai_realtime_configured is True
     assert settings.realtime_configured is True
+    assert settings.normalized_realtime_input_audio_format == "g711_ulaw"
+    assert settings.effective_realtime_input_audio_format == "g711_ulaw"
+    assert settings.realtime_input_audio_passthrough_enabled is True
     assert settings.azure_speech_tts_configured is False
     assert settings.missing_azure_speech_tts_variables() == ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"]
     reset_settings_cache()

@@ -172,7 +172,7 @@ export function VoiceDebugConsole() {
       setVadState("listening");
       return;
     }
-    if (message.type === "triage.case.created") {
+    if (message.type === "triage.case.created" || message.type === "case.updated") {
       setTranscript(message.transcript);
       setTriage(message.record.case);
       setCaseRecord(message.record);

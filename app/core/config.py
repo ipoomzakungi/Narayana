@@ -52,6 +52,8 @@ class Settings:
     azure_realtime_api_key: str = ""
     azure_realtime_deployment: str = ""
     azure_realtime_api_version: str = ""
+    realtime_input_audio_format: str = "pcm16"
+    realtime_twilio_audio_passthrough: bool = False
     azure_voice_live_endpoint: str = ""
     azure_voice_live_model: str = ""
     cosmos_db_endpoint: str = ""
@@ -136,6 +138,11 @@ class Settings:
             azure_realtime_api_key=os.getenv("AZURE_REALTIME_API_KEY", ""),
             azure_realtime_deployment=os.getenv("AZURE_REALTIME_DEPLOYMENT", ""),
             azure_realtime_api_version=os.getenv("AZURE_REALTIME_API_VERSION", ""),
+            realtime_input_audio_format=os.getenv("REALTIME_INPUT_AUDIO_FORMAT", "pcm16"),
+            realtime_twilio_audio_passthrough=_truthy(
+                os.getenv("REALTIME_TWILIO_AUDIO_PASSTHROUGH"),
+                default=False,
+            ),
             azure_voice_live_endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT", ""),
             azure_voice_live_model=os.getenv("AZURE_VOICE_LIVE_MODEL", ""),
             cosmos_db_endpoint=os.getenv("COSMOS_DB_ENDPOINT", ""),
@@ -249,6 +256,23 @@ class Settings:
         return "none"
 
     @property
+    def normalized_realtime_input_audio_format(self) -> str:
+        audio_format = self.realtime_input_audio_format.strip().lower() or "pcm16"
+        if audio_format in {"pcm16", "g711_ulaw"}:
+            return audio_format
+        return "pcm16"
+
+    @property
+    def effective_realtime_input_audio_format(self) -> str:
+        if self.normalized_realtime_input_audio_format == "g711_ulaw" and self.realtime_twilio_audio_passthrough:
+            return "g711_ulaw"
+        return "pcm16"
+
+    @property
+    def realtime_input_audio_passthrough_enabled(self) -> bool:
+        return self.effective_realtime_input_audio_format == "g711_ulaw"
+
+    @property
     def azure_openai_realtime_configured(self) -> bool:
         return bool(
             self.azure_realtime_endpoint
@@ -295,6 +319,16 @@ class Settings:
         warnings: list[str] = []
         if self.realtime_provider.strip().lower() != self.normalized_realtime_provider:
             warnings.append("REALTIME_PROVIDER is invalid; realtime voice is disabled.")
+        if self.realtime_input_audio_format.strip().lower() != self.normalized_realtime_input_audio_format:
+            warnings.append("REALTIME_INPUT_AUDIO_FORMAT is invalid; realtime input audio falls back to pcm16.")
+        if (
+            self.normalized_realtime_input_audio_format == "g711_ulaw"
+            and not self.realtime_twilio_audio_passthrough
+        ):
+            warnings.append(
+                "REALTIME_INPUT_AUDIO_FORMAT=g711_ulaw requires "
+                "REALTIME_TWILIO_AUDIO_PASSTHROUGH=true; realtime input audio falls back to pcm16."
+            )
         if not self.enable_realtime_voice:
             return warnings
         if self.normalized_realtime_provider == "none":

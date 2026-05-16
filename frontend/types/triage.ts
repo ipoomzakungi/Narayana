@@ -215,7 +215,7 @@ export type VoiceWsMessage =
     }
   | { type: "debug.event"; event: AudioDebugEvent }
   | {
-      type: "triage.case.created";
+      type: "triage.case.created" | "case.updated";
       session_id: string;
       transcript: string;
       provider_mode: ProviderMode;

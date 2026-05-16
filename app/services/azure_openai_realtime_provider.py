@@ -152,7 +152,10 @@ class AzureOpenAIRealtimeProvider(BaseRealtimeProvider):
                 warnings=[str(error.get("message") or "Azure OpenAI Realtime returned an error.")],
                 metadata={"provider_event_type": event_type},
             )
-        return None
+        return self._event(
+            RealtimeAudioEventType.UNKNOWN_PROVIDER_EVENT,
+            metadata={"provider_event_type": event_type or "missing"},
+        )
 
     def _transcript_event(
         self,
@@ -177,11 +180,13 @@ class AzureOpenAIRealtimeProvider(BaseRealtimeProvider):
             return None
         raw_arguments = message.get("arguments") or item.get("arguments") or "{}"
         arguments = _parse_tool_arguments(raw_arguments)
+        tool_call_id = message.get("call_id") or item.get("call_id") or message.get("item_id") or item.get("id")
         return self._event(
             RealtimeAudioEventType.STRUCTURED_EXTRACTION,
             metadata={
                 "provider_event_type": event_type,
                 "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
                 "tool_arguments": arguments,
             },
         )

@@ -32,6 +32,9 @@ class RealtimeVoiceProvider(Protocol):
     async def send_audio_frame(self, frame: AudioFrame) -> RealtimeSendResult:
         ...
 
+    async def send_tool_result(self, *, tool_call_id: str | None, result: dict[str, Any]) -> RealtimeSendResult:
+        ...
+
     async def receive_audio_event(self) -> RealtimeAudioEvent | None:
         ...
 
@@ -53,11 +56,14 @@ class RealtimeProviderSelection:
         return self.enabled and self.configured and self.provider is not None
 
     def debug_payload(self) -> dict[str, Any]:
+        provider_settings = getattr(self.provider, "settings", None)
         return {
             "enabled": self.enabled,
             "provider": self.provider_mode.value,
             "configured": self.configured,
             "active_candidate": self.active_candidate,
+            "input_audio_format": getattr(provider_settings, "effective_realtime_input_audio_format", None),
+            "twilio_audio_passthrough": getattr(provider_settings, "realtime_input_audio_passthrough_enabled", False),
             "fallback_reason": self.fallback_reason,
             "warnings": list(self.warnings),
         }
@@ -98,6 +104,30 @@ class BaseRealtimeProvider:
             await self.websocket.send_json(payload)
             return
         raise RuntimeError("Realtime websocket object does not support send.")
+
+    async def send_tool_result(self, *, tool_call_id: str | None, result: dict[str, Any]) -> RealtimeSendResult:
+        tracker = self._tracker(self.session_id or "", self.call_id)
+        tracker.start("tool_result_sent")
+        try:
+            item: dict[str, Any] = {
+                "type": "function_call_output",
+                "output": json.dumps(result, ensure_ascii=False),
+            }
+            if tool_call_id:
+                item["call_id"] = tool_call_id
+            await self._send_json({"type": "conversation.item.create", "item": item})
+            await self._send_json({"type": "response.create"})
+        except Exception as exc:
+            sample = tracker.sample("tool_result_sent", metadata={"reason": "tool_result_failed"})
+            return RealtimeSendResult(
+                sent=False,
+                provider=self.mode,
+                fallback_reason="tool_result_failed",
+                warnings=[f"Realtime tool result send failed: {exc}"],
+                latency_ms=sample.latency_ms or 0,
+            )
+        sample = tracker.sample("tool_result_sent", metadata={"tool_call_id": tool_call_id})
+        return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=sample.latency_ms or 0)
 
     async def _recv_json(self) -> dict[str, Any]:
         if self.websocket is None:
@@ -218,7 +248,7 @@ def build_openai_realtime_session_update(settings: Settings, instructions: str) 
         "session": {
             "instructions": instructions,
             "modalities": ["audio", "text"],
-            "input_audio_format": "pcm16",
+            "input_audio_format": settings.effective_realtime_input_audio_format,
             "output_audio_format": "g711_ulaw",
             "turn_detection": {"type": "server_vad"},
             "tools": [build_realtime_intake_tool()],

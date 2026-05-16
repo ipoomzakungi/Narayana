@@ -72,6 +72,19 @@ class FakeWebSocket:
         self.sent.append(payload)
 
 
+class FakeRealtimeToolProvider:
+    mode = RealtimeProviderMode.AZURE_OPENAI_REALTIME
+
+    def __init__(self) -> None:
+        self.tool_results: list[dict] = []
+
+    async def send_tool_result(self, *, tool_call_id: str | None, result: dict):
+        from app.models.realtime import RealtimeSendResult
+
+        self.tool_results.append({"tool_call_id": tool_call_id, "result": result})
+        return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=2)
+
+
 @pytest.mark.asyncio
 async def test_send_tts_media_sends_media_and_mark(monkeypatch) -> None:
     import app.api.routes_twilio as routes_twilio
@@ -458,6 +471,193 @@ async def test_handle_realtime_transcript_creates_case(tmp_path) -> None:
     assert case_payload["record"]["case"]["caller_tone"] in {"unknown", "urgent", "distressed"}
     assert case_payload["record"]["case"]["recommended_operator_action"] == "immediate_human_review"
     assert case_payload["record"]["case"]["realtime_transcript_turns"][0]["text"] == event.text
+
+
+@pytest.mark.asyncio
+async def test_realtime_transcript_completed_can_emit_intake_followup(tmp_path) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    websocket = FakeWebSocket()
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        text="น้ำท่วมอยู่ที่หาดใหญ่",
+    )
+
+    fallback = await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=Settings(
+            use_mock_services=True,
+            enable_multi_turn_intake=True,
+            enable_realtime_voice=True,
+            realtime_provider="azure_openai_realtime",
+            case_store_path=str(tmp_path / "cases.json"),
+        ),
+        event=event,
+        stream_sid="MZ123",
+        session_id="twilio_CA_REALTIME_FOLLOWUP",
+        call_id="CA_REALTIME_FOLLOWUP",
+    )
+
+    assert fallback is False
+    followup = next(message for message in websocket.sent if message.get("type") == "intake.followup")
+    assert followup["transcript"] == event.text
+    assert followup["missing_fields"]
+    assert followup["source_input_mode"] == "twilio_call"
+
+
+@pytest.mark.asyncio
+async def test_realtime_structured_extraction_creates_case_and_sends_tool_result(tmp_path) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    websocket = FakeWebSocket()
+    provider = FakeRealtimeToolProvider()
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.STRUCTURED_EXTRACTION,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        metadata={
+            "tool_call_id": "call_structured",
+            "tool_arguments": {
+                "situation": "ไฟไหม้บ้าน",
+                "incident_type": "fire",
+                "location": "หาดใหญ่",
+                "people_affected": 2,
+                "injuries": "smoke inhalation",
+                "immediate_needs": ["fire", "medical"],
+                "caller_phone": "+15550001111",
+                "language": "th",
+                "missing_fields": [],
+                "caller_tone": "urgent",
+                "recommended_operator_action": "immediate_human_review",
+            },
+        },
+    )
+
+    fallback = await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=Settings(
+            use_mock_services=True,
+            enable_realtime_voice=True,
+            realtime_provider="azure_openai_realtime",
+            azure_realtime_deployment="gpt-realtime",
+            case_store_path=str(tmp_path / "cases.json"),
+        ),
+        provider_client=provider,
+        event=event,
+        stream_sid="MZ123",
+        session_id="twilio_CA_REALTIME_STRUCTURED",
+        call_id="CA_REALTIME_STRUCTURED",
+    )
+
+    assert fallback is False
+    case_payload = next(message for message in websocket.sent if message.get("type") == "triage.case.created")
+    assert case_payload["record"]["case"]["incident_type"] == "fire"
+    assert case_payload["record"]["case"]["realtime_provider"] == "azure_openai_realtime"
+    assert provider.tool_results == [
+        {
+            "tool_call_id": "call_structured",
+            "result": {
+                "status": "escalated",
+                "missing_fields": [],
+                "human_review_required": True,
+                "case_id": case_payload["record"]["case"]["case_id"],
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_realtime_transcript_plus_structured_extraction_updates_existing_case(tmp_path) -> None:
+    import json
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    websocket = FakeWebSocket()
+    settings = Settings(
+        use_mock_services=True,
+        enable_realtime_voice=True,
+        realtime_provider="azure_openai_realtime",
+        azure_realtime_deployment="gpt-realtime",
+        case_store_path=str(tmp_path / "cases.json"),
+    )
+    session_id = "twilio_CA_REALTIME_IDEMPOTENT"
+
+    await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=settings,
+        event=RealtimeAudioEvent(
+            event_type=RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED,
+            provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+            text="ไฟไหม้ที่หาดใหญ่ มีควันไฟ มีคนบาดเจ็บ 2 คน",
+        ),
+        stream_sid="MZ123",
+        session_id=session_id,
+        call_id="CA_REALTIME_IDEMPOTENT",
+    )
+    await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=settings,
+        event=RealtimeAudioEvent(
+            event_type=RealtimeAudioEventType.STRUCTURED_EXTRACTION,
+            provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+            metadata={
+                "tool_arguments": {
+                    "situation": "ไฟไหม้บ้าน",
+                    "incident_type": "fire",
+                    "location": "หาดใหญ่",
+                    "people_affected": 2,
+                    "injuries": "smoke inhalation",
+                    "immediate_needs": ["fire", "medical"],
+                    "caller_phone": "+15550001111",
+                    "language": "th",
+                    "missing_fields": [],
+                    "caller_tone": "urgent",
+                    "recommended_operator_action": "immediate_human_review",
+                },
+            },
+        ),
+        stream_sid="MZ123",
+        session_id=session_id,
+        call_id="CA_REALTIME_IDEMPOTENT",
+    )
+
+    created = [message for message in websocket.sent if message.get("type") == "triage.case.created"]
+    updated = [message for message in websocket.sent if message.get("type") == "case.updated"]
+    assert len(created) == 1
+    assert len(updated) == 1
+    assert created[0]["record"]["case"]["case_id"] == updated[0]["record"]["case"]["case_id"]
+    data = json.loads((tmp_path / "cases.json").read_text(encoding="utf-8"))
+    assert list(data) == [created[0]["record"]["case"]["case_id"]]
+
+
+@pytest.mark.asyncio
+async def test_unknown_realtime_provider_event_is_logged_safely(caplog) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    websocket = FakeWebSocket()
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.UNKNOWN_PROVIDER_EVENT,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        metadata={"provider_event_type": "provider.unexpected", "audio_base64": "AAAA", "api_key": "secret"},
+    )
+
+    with caplog.at_level("INFO", logger="app.api.routes_twilio"):
+        fallback = await routes_twilio._handle_realtime_event(
+            websocket,
+            settings=Settings(call_audit_enabled=True),
+            event=event,
+            stream_sid="MZ123",
+            session_id="twilio_CA_UNKNOWN",
+            call_id="CA_UNKNOWN",
+        )
+
+    assert fallback is False
+    assert websocket.sent[0]["type"] == "realtime.unknown_provider_event"
+    assert "provider.unexpected" in caplog.text
+    assert "AAAA" not in caplog.text
+    assert "secret" not in caplog.text
 
 
 def test_realtime_logging_redacts_raw_audio_and_secrets(caplog) -> None:

@@ -69,6 +69,30 @@ async def test_local_case_repository_persists_optional_intake_metadata(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_local_case_repository_persists_realtime_metadata(tmp_path) -> None:
+    repository = LocalCaseRepository(str(tmp_path / "cases.json"))
+    case = make_case()
+    case.realtime_provider = "azure_openai_realtime"
+    case.realtime_model_or_deployment = "gpt-realtime"
+    case.realtime_transcript_turns = [{"speaker": "caller", "text": "ไฟไหม้ที่หาดใหญ่"}]
+    case.caller_tone = "urgent"
+    case.missing_fields = []
+    case.recommended_operator_action = "immediate_human_review"
+    case.fallback_reason = "provider_error"
+
+    await repository.create(case, session_id="twilio_CA123", source_provider=ProviderMode.AZURE_OPENAI_REALTIME)
+    loaded = await repository.get(case.case_id)
+
+    assert loaded is not None
+    assert loaded.realtime_provider == "azure_openai_realtime"
+    assert loaded.realtime_model_or_deployment == "gpt-realtime"
+    assert loaded.realtime_transcript_turns == [{"speaker": "caller", "text": "ไฟไหม้ที่หาดใหญ่"}]
+    assert loaded.caller_tone == "urgent"
+    assert loaded.recommended_operator_action == "immediate_human_review"
+    assert loaded.fallback_reason == "provider_error"
+
+
+@pytest.mark.asyncio
 async def test_missing_case_returns_none(tmp_path) -> None:
     repository = LocalCaseRepository(str(tmp_path / "cases.json"))
 

@@ -36,6 +36,7 @@ class RealtimeAudioEventType(StrEnum):
     STRUCTURED_EXTRACTION = "structured.extraction"
     RESPONSE_STARTED = "response.started"
     RESPONSE_COMPLETED = "response.completed"
+    UNKNOWN_PROVIDER_EVENT = "unknown_provider_event"
     ERROR = "error"
     FALLBACK = "fallback"
 

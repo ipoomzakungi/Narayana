@@ -172,3 +172,42 @@ def normalize_twilio_media_message(
         audio_base64=base64.b64encode(pcm16).decode("ascii"),
         assistant_is_speaking=assistant_is_speaking,
     )
+
+
+def passthrough_twilio_media_message(
+    message: dict[str, Any],
+    *,
+    session_id: str,
+    sample_rate_hz: int = 8000,
+    assistant_is_speaking: bool = False,
+) -> AudioFrame:
+    if message.get("event") != "media":
+        raise TwilioMediaError("Twilio message is not a media event.")
+    media = message.get("media")
+    if not isinstance(media, dict):
+        raise TwilioMediaError("Twilio media event is missing media details.")
+    payload_base64 = media.get("payload")
+    if not isinstance(payload_base64, str):
+        raise TwilioMediaError("Twilio media event is missing payload.")
+    try:
+        raw_payload = base64.b64decode(payload_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise TwilioMediaError("Twilio media payload is not valid base64.") from exc
+    if not raw_payload:
+        raise TwilioMediaError("Twilio media payload is empty.")
+    expected_samples = sample_rate_hz * 20 // 1000
+    if len(raw_payload) != expected_samples:
+        actual_ms = estimate_audio_duration_ms(len(raw_payload), sample_rate_hz=sample_rate_hz)
+        raise TwilioMediaError(f"Twilio media frame must be 20 ms; received about {actual_ms} ms.")
+
+    return AudioFrame(
+        session_id=session_id,
+        sequence=_to_int(message.get("sequenceNumber"), _to_int(media.get("chunk"), 0)),
+        timestamp_ms=_to_int(media.get("timestamp"), 0),
+        encoding="g711_ulaw",
+        sample_rate_hz=sample_rate_hz,
+        channels=1,
+        duration_ms=20,
+        audio_base64=payload_base64,
+        assistant_is_speaking=assistant_is_speaking,
+    )
