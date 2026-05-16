@@ -33,6 +33,10 @@ async def test_gateway_demo_smoke(tmp_path) -> None:
     assert health.json()["twilio_initial_greeting_profile"] == "greeting"
     assert health.json()["azure_speech_tts_configured"] is False
     assert health.json()["azure_speech_voice"] == "th-TH-PremwadeeNeural"
+    assert health.json()["realtime_input_audio_format"] == "pcm16"
+    assert health.json()["effective_realtime_input_audio_format"] == "pcm16"
+    assert health.json()["realtime_twilio_audio_passthrough"] is False
+    assert health.json()["realtime_input_audio_passthrough_enabled"] is False
     assert tts.status_code == 200
     assert tts.json()["configured"] is False
     assert "payloads" not in tts.json()
@@ -41,3 +45,33 @@ async def test_gateway_demo_smoke(tmp_path) -> None:
     assert triage.json()["human_review_required"] is True
     assert case.status_code == 200
     assert case.json()["case"]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_azure_health_reports_realtime_twilio_passthrough_fields(tmp_path) -> None:
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        use_mock_services=False,
+        enable_realtime_voice=True,
+        realtime_provider="azure_openai_realtime",
+        azure_realtime_endpoint="https://aoai.example.openai.azure.com",
+        azure_realtime_api_key="test-key",
+        azure_realtime_deployment="gpt-realtime",
+        azure_realtime_api_version="v1",
+        realtime_input_audio_format="g711_ulaw",
+        realtime_twilio_audio_passthrough=True,
+        case_store_path=str(tmp_path / "cases.json"),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        health = await client.get("/api/health/azure")
+
+    payload = health.json()
+    assert health.status_code == 200
+    assert payload["enable_realtime_voice"] is True
+    assert payload["realtime_provider"] == "azure_openai_realtime"
+    assert payload["azure_realtime_configured"] is True
+    assert payload["realtime_input_audio_format"] == "g711_ulaw"
+    assert payload["effective_realtime_input_audio_format"] == "g711_ulaw"
+    assert payload["realtime_twilio_audio_passthrough"] is True
+    assert payload["realtime_input_audio_passthrough_enabled"] is True

@@ -125,6 +125,10 @@ class AzureHealth(BaseModel):
     azure_realtime_configured: bool = False
     azure_openai_realtime_configured: bool = False
     azure_voice_live_realtime_configured: bool = False
+    realtime_input_audio_format: str = "pcm16"
+    effective_realtime_input_audio_format: str = "pcm16"
+    realtime_twilio_audio_passthrough: bool = False
+    realtime_input_audio_passthrough_enabled: bool = False
     realtime_warnings: list[str] = Field(default_factory=list)
     missing_variables: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
