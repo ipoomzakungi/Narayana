@@ -1980,6 +1980,21 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                     processor=processor,
                 )
                 processed_payloads = await processor.process_frame(frame)
+                caller_speech_detected = any(
+                    payload.get("type") == "debug.event"
+                    and payload.get("event", {}).get("event_type")
+                    in {"vad.speech.start", "vad.speech.end", "turn.committed"}
+                    for payload in processed_payloads
+                )
+                if caller_speech_detected:
+                    lifecycle_service.track_caller_speech(lifecycle_state)
+                    log_call_event(
+                        logger,
+                        "caller.speech.detected",
+                        session_id=session_id,
+                        call_id=call_id,
+                        metadata={"sequence": frame.sequence},
+                    )
                 if any(
                     payload.get("type") == "debug.event"
                     and payload.get("event", {}).get("event_type") == "barge_in.detected"
