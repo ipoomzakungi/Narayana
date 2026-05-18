@@ -320,6 +320,7 @@ def _build_openai_realtime_v1_session(
             "input": audio_input,
             "output": {
                 "format": {"type": "audio/pcmu"},
+                "voice": settings.normalized_realtime_output_voice,
             },
         },
         "tools": [build_realtime_intake_tool()],

@@ -1632,6 +1632,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         "input_audio_format": settings.effective_realtime_input_audio_format,
                         "passthrough_enabled": settings.realtime_input_audio_passthrough_enabled,
                         "input_transcription_enabled": settings.realtime_input_transcription_enabled,
+                        "realtime_output_voice": settings.normalized_realtime_output_voice,
                     },
                 )
                 realtime_selection = get_realtime_provider(settings)

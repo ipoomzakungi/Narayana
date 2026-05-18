@@ -21,6 +21,18 @@ DEFAULT_ASSISTANT_ALLOWED_TOPICS = (
     "utility_infrastructure",
     "shelter_supplies",
 )
+SUPPORTED_REALTIME_OUTPUT_VOICES = (
+    "alloy",
+    "ash",
+    "ballad",
+    "cedar",
+    "coral",
+    "echo",
+    "marin",
+    "sage",
+    "shimmer",
+    "verse",
+)
 
 
 def _truthy(value: str | None, default: bool = False) -> bool:
@@ -55,6 +67,7 @@ class Settings:
     realtime_input_audio_format: str = "pcm16"
     realtime_twilio_audio_passthrough: bool = False
     realtime_input_transcription_enabled: bool = False
+    realtime_output_voice: str = "marin"
     azure_voice_live_endpoint: str = ""
     azure_voice_live_model: str = ""
     cosmos_db_endpoint: str = ""
@@ -148,6 +161,7 @@ class Settings:
                 os.getenv("REALTIME_INPUT_TRANSCRIPTION_ENABLED"),
                 default=False,
             ),
+            realtime_output_voice=os.getenv("REALTIME_OUTPUT_VOICE", "marin"),
             azure_voice_live_endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT", ""),
             azure_voice_live_model=os.getenv("AZURE_VOICE_LIVE_MODEL", ""),
             cosmos_db_endpoint=os.getenv("COSMOS_DB_ENDPOINT", ""),
@@ -278,6 +292,13 @@ class Settings:
         return self.effective_realtime_input_audio_format == "g711_ulaw"
 
     @property
+    def normalized_realtime_output_voice(self) -> str:
+        voice = self.realtime_output_voice.strip().lower() or "marin"
+        if voice in SUPPORTED_REALTIME_OUTPUT_VOICES:
+            return voice
+        return "marin"
+
+    @property
     def azure_openai_realtime_configured(self) -> bool:
         return bool(
             self.azure_realtime_endpoint
@@ -326,6 +347,8 @@ class Settings:
             warnings.append("REALTIME_PROVIDER is invalid; realtime voice is disabled.")
         if self.realtime_input_audio_format.strip().lower() != self.normalized_realtime_input_audio_format:
             warnings.append("REALTIME_INPUT_AUDIO_FORMAT is invalid; realtime input audio falls back to pcm16.")
+        if self.realtime_output_voice.strip().lower() != self.normalized_realtime_output_voice:
+            warnings.append("REALTIME_OUTPUT_VOICE is invalid; realtime output voice falls back to marin.")
         if (
             self.normalized_realtime_input_audio_format == "g711_ulaw"
             and not self.realtime_twilio_audio_passthrough

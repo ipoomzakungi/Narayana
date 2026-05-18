@@ -65,6 +65,8 @@ def test_telephony_defaults_keep_local_mic_and_no_provider() -> None:
     assert settings.effective_realtime_input_audio_format == "pcm16"
     assert settings.realtime_twilio_audio_passthrough is False
     assert settings.realtime_input_audio_passthrough_enabled is False
+    assert settings.realtime_output_voice == "marin"
+    assert settings.normalized_realtime_output_voice == "marin"
     assert settings.realtime_configured is False
     assert settings.azure_openai_realtime_configured is False
     assert settings.azure_voice_live_realtime_configured is False
@@ -140,6 +142,7 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     monkeypatch.setenv("AZURE_REALTIME_API_VERSION", "2025-04-01-preview")
     monkeypatch.setenv("REALTIME_INPUT_AUDIO_FORMAT", "g711_ulaw")
     monkeypatch.setenv("REALTIME_TWILIO_AUDIO_PASSTHROUGH", "true")
+    monkeypatch.setenv("REALTIME_OUTPUT_VOICE", "coral")
     reset_settings_cache()
 
     settings = Settings.from_env()
@@ -185,9 +188,17 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     assert settings.normalized_realtime_input_audio_format == "g711_ulaw"
     assert settings.effective_realtime_input_audio_format == "g711_ulaw"
     assert settings.realtime_input_audio_passthrough_enabled is True
+    assert settings.normalized_realtime_output_voice == "coral"
     assert settings.azure_speech_tts_configured is False
     assert settings.missing_azure_speech_tts_variables() == ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"]
     reset_settings_cache()
+
+
+def test_invalid_realtime_output_voice_warns_and_falls_back() -> None:
+    settings = Settings(realtime_output_voice="unsupported")
+
+    assert settings.normalized_realtime_output_voice == "marin"
+    assert "REALTIME_OUTPUT_VOICE is invalid" in " ".join(settings.realtime_warnings())
 
 
 def test_cors_allow_origins_parse_from_env(monkeypatch) -> None:

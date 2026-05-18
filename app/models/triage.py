@@ -130,6 +130,7 @@ class AzureHealth(BaseModel):
     realtime_twilio_audio_passthrough: bool = False
     realtime_input_audio_passthrough_enabled: bool = False
     realtime_input_transcription_enabled: bool = False
+    realtime_output_voice: str = "marin"
     realtime_warnings: list[str] = Field(default_factory=list)
     missing_variables: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

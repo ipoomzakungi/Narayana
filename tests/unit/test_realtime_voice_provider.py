@@ -183,6 +183,7 @@ def test_openai_realtime_v1_session_update_uses_nested_audio_schema() -> None:
             realtime_input_audio_format="g711_ulaw",
             realtime_twilio_audio_passthrough=True,
             realtime_input_transcription_enabled=True,
+            realtime_output_voice="coral",
         ),
         "crisis only",
     )
@@ -201,6 +202,7 @@ def test_openai_realtime_v1_session_update_uses_nested_audio_schema() -> None:
     assert session["audio"]["input"]["turn_detection"]["create_response"] is True
     assert session["audio"]["input"]["turn_detection"]["interrupt_response"] is True
     assert session["audio"]["output"]["format"] == {"type": "audio/pcmu"}
+    assert session["audio"]["output"]["voice"] == "coral"
     assert session["tools"][0]["name"] == "crisis_intake_update"
     assert session["tool_choice"] == "auto"
 
