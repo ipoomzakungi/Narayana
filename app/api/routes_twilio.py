@@ -403,6 +403,76 @@ async def _drain_realtime_events(
     return False
 
 
+async def _realtime_receive_loop(
+    *,
+    provider: RealtimeVoiceProvider,
+    queue: asyncio.Queue[RealtimeAudioEvent],
+    session_id: str,
+    call_id: str,
+) -> None:
+    while True:
+        try:
+            event = await provider.receive_audio_event()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await queue.put(
+                RealtimeAudioEvent(
+                    event_type=RealtimeAudioEventType.ERROR,
+                    provider=provider.mode,
+                    session_id=session_id,
+                    call_id=call_id,
+                    fallback_reason="provider_error",
+                    warnings=[f"Realtime provider receive failed: {exc}"],
+                )
+            )
+            return
+        if event is None:
+            await asyncio.sleep(0.001)
+            continue
+        await queue.put(event)
+
+
+async def _cancel_realtime_receive_task(task: asyncio.Task | None) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        return
+
+
+async def _drain_realtime_event_queue(
+    websocket: WebSocket,
+    *,
+    settings,
+    provider: RealtimeVoiceProvider,
+    queue: asyncio.Queue[RealtimeAudioEvent],
+    stream_sid: str | None,
+    session_id: str,
+    call_id: str,
+    max_events: int = 16,
+) -> bool:
+    for _ in range(max_events):
+        try:
+            event = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return False
+        fallback = await _handle_realtime_event(
+            websocket,
+            settings=settings,
+            provider_client=provider,
+            event=event,
+            stream_sid=stream_sid,
+            session_id=session_id,
+            call_id=call_id,
+        )
+        if fallback:
+            return True
+    return False
+
+
 def _realtime_model_or_deployment(settings, provider: str) -> str:
     if provider == "azure_voice_live":
         return settings.azure_voice_live_model
@@ -1464,6 +1534,8 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
     realtime_selection = get_realtime_provider(settings)
     realtime_provider: RealtimeVoiceProvider | None = None
     realtime_active = False
+    realtime_event_queue: asyncio.Queue[RealtimeAudioEvent] = asyncio.Queue()
+    realtime_receive_task: asyncio.Task | None = None
     processor = AudioSessionProcessor(
         settings=settings,
         session_id=session_id,
@@ -1497,6 +1569,23 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                 continue
 
             event = message.get("event")
+            if event != "media" and realtime_active and realtime_provider is not None and not realtime_event_queue.empty():
+                fallback_to_current = await _drain_realtime_event_queue(
+                    websocket,
+                    settings=settings,
+                    provider=realtime_provider,
+                    queue=realtime_event_queue,
+                    stream_sid=stream_sid,
+                    session_id=session_id,
+                    call_id=call_id,
+                )
+                if fallback_to_current:
+                    realtime_active = False
+                    await _cancel_realtime_receive_task(realtime_receive_task)
+                    realtime_receive_task = None
+                    await realtime_provider.close()
+                    realtime_provider = None
+
             if event == "connected":
                 continue
 
@@ -1555,6 +1644,15 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                     if connection.connected:
                         realtime_provider = realtime_selection.provider
                         realtime_active = True
+                        realtime_event_queue = asyncio.Queue()
+                        realtime_receive_task = asyncio.create_task(
+                            _realtime_receive_loop(
+                                provider=realtime_provider,
+                                queue=realtime_event_queue,
+                                session_id=session_id,
+                                call_id=call_id,
+                            )
+                        )
                         _log_realtime(
                             settings=settings,
                             event_type="connected",
@@ -1714,10 +1812,12 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                                 },
                             )
                         )
-                        fallback_to_current = await _drain_realtime_events(
+                        await asyncio.sleep(0)
+                        fallback_to_current = await _drain_realtime_event_queue(
                             websocket,
                             settings=settings,
                             provider=realtime_provider,
+                            queue=realtime_event_queue,
                             stream_sid=stream_sid,
                             session_id=session_id,
                             call_id=call_id,
@@ -1736,6 +1836,8 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                             latency_ms=send_result.latency_ms,
                         )
                     realtime_active = False
+                    await _cancel_realtime_receive_task(realtime_receive_task)
+                    realtime_receive_task = None
                     await realtime_provider.close()
                     realtime_provider = None
                 try:
@@ -1796,13 +1898,18 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         )
                     )
                 if realtime_provider is not None:
+                    await _cancel_realtime_receive_task(realtime_receive_task)
+                    realtime_receive_task = None
                     await realtime_provider.close()
+                    realtime_provider = None
                 await websocket.send_json({"type": "session.closed", "session_id": session_id})
                 await websocket.close()
                 return
 
             await websocket.send_json({"type": "error", "detail": f"Unsupported Twilio event: {event}"})
     except WebSocketDisconnect:
+        return
+    finally:
+        await _cancel_realtime_receive_task(realtime_receive_task)
         if realtime_provider is not None:
             await realtime_provider.close()
-        return

@@ -113,7 +113,11 @@ class AzureOpenAIRealtimeProvider(BaseRealtimeProvider):
             str(error.get("param") or ""),
             str(error.get("code") or ""),
         )
-        return any("input_audio_transcription" in field for field in fields)
+        return any(
+            token in field
+            for field in fields
+            for token in ("input_audio_transcription", "audio.input.transcription")
+        )
 
     def _normalize_message(self, message: dict) -> RealtimeAudioEvent | None:
         event_type = str(message.get("type") or "")
