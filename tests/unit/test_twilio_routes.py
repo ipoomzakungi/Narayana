@@ -766,6 +766,7 @@ async def test_unknown_realtime_provider_event_is_logged_safely(caplog) -> None:
         provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
         metadata={"provider_event_type": "provider.unexpected", "audio_base64": "AAAA", "api_key": "secret"},
     )
+    debug_state = {}
 
     with caplog.at_level("INFO", logger="app.api.routes_twilio"):
         fallback = await routes_twilio._handle_realtime_event(
@@ -775,9 +776,14 @@ async def test_unknown_realtime_provider_event_is_logged_safely(caplog) -> None:
             stream_sid="MZ123",
             session_id="twilio_CA_UNKNOWN",
             call_id="CA_UNKNOWN",
+            debug_state=debug_state,
         )
 
     assert fallback is False
+    assert debug_state == {
+        "last_event_type": "unknown_provider_event",
+        "last_provider_event_type": "provider.unexpected",
+    }
     assert websocket.sent[0]["type"] == "realtime.unknown_provider_event"
     assert "provider.unexpected" in caplog.text
     assert "AAAA" not in caplog.text

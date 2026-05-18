@@ -367,6 +367,7 @@ async def _drain_realtime_events(
     stream_sid: str | None,
     session_id: str,
     call_id: str,
+    debug_state: dict | None = None,
     max_events: int = 8,
 ) -> bool:
     for _ in range(max_events):
@@ -404,6 +405,7 @@ async def _drain_realtime_events(
             stream_sid=stream_sid,
             session_id=session_id,
             call_id=call_id,
+            debug_state=debug_state,
         )
         if fallback:
             return True
@@ -459,6 +461,7 @@ async def _drain_realtime_event_queue(
     stream_sid: str | None,
     session_id: str,
     call_id: str,
+    debug_state: dict | None = None,
     max_events: int = 16,
 ) -> bool:
     for _ in range(max_events):
@@ -474,10 +477,28 @@ async def _drain_realtime_event_queue(
             stream_sid=stream_sid,
             session_id=session_id,
             call_id=call_id,
+            debug_state=debug_state,
         )
         if fallback:
             return True
     return False
+
+
+def _update_realtime_debug_state(debug_state: dict | None, event: RealtimeAudioEvent) -> None:
+    if debug_state is None:
+        return
+    provider_event_type = event.metadata.get("provider_event_type") if isinstance(event.metadata, dict) else None
+    debug_state["last_event_type"] = event.event_type.value
+    debug_state["last_provider_event_type"] = provider_event_type
+    if event.event_type == RealtimeAudioEventType.RESPONSE_STARTED:
+        debug_state["response_started"] = True
+    if event.event_type == RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED:
+        debug_state["output_audio_received"] = True
+    if event.event_type == RealtimeAudioEventType.RESPONSE_COMPLETED:
+        debug_state["response_completed"] = True
+        for key in ("response_id", "response_status", "response_status_details"):
+            if key in event.metadata:
+                debug_state[key] = event.metadata[key]
 
 
 def _realtime_model_or_deployment(settings, provider: str) -> str:
@@ -1058,8 +1079,10 @@ async def _handle_realtime_event(
     stream_sid: str | None,
     session_id: str,
     call_id: str,
+    debug_state: dict | None = None,
 ) -> bool:
     provider = event.provider.value
+    _update_realtime_debug_state(debug_state, event)
     _ensure_realtime_state(settings=settings, session_id=session_id, call_id=call_id, provider=provider)
     if event.event_type == RealtimeAudioEventType.ERROR:
         _log_realtime(
@@ -1552,6 +1575,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
     realtime_active = False
     realtime_event_queue: asyncio.Queue[RealtimeAudioEvent] = asyncio.Queue()
     realtime_receive_task: asyncio.Task | None = None
+    realtime_debug_state: dict = {}
     processor = AudioSessionProcessor(
         settings=settings,
         session_id=session_id,
@@ -1598,6 +1622,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                     stream_sid=stream_sid,
                     session_id=session_id,
                     call_id=call_id,
+                    debug_state=realtime_debug_state,
                 )
                 if fallback_to_current:
                     realtime_active = False
@@ -1668,6 +1693,12 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         realtime_provider = realtime_selection.provider
                         realtime_active = True
                         realtime_event_queue = asyncio.Queue()
+                        realtime_debug_state = {
+                            "provider": realtime_provider.mode.value,
+                            "response_started": False,
+                            "output_audio_received": False,
+                            "response_completed": False,
+                        }
                         realtime_receive_task = asyncio.create_task(
                             _realtime_receive_loop(
                                 provider=realtime_provider,
@@ -1850,6 +1881,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                             stream_sid=stream_sid,
                             session_id=session_id,
                             call_id=call_id,
+                            debug_state=realtime_debug_state,
                         )
                         if not fallback_to_current:
                             continue
@@ -1917,7 +1949,19 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                 continue
 
             if event == "stop":
-                log_call_event(logger, "call.closed", session_id=session_id, call_id=call_id, metadata={"reason": "twilio_stop"})
+                log_call_event(
+                    logger,
+                    "call.closed",
+                    session_id=session_id,
+                    call_id=call_id,
+                    metadata={
+                        "reason": "twilio_stop",
+                        "streamSid_present": bool(stream_sid),
+                        "realtime_active": realtime_active,
+                        "realtime_queue_size": realtime_event_queue.qsize(),
+                        **realtime_debug_state,
+                    },
+                )
                 if realtime_selection.enabled:
                     asyncio.create_task(
                         _finalize_realtime_call_background(
@@ -1936,7 +1980,22 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                 return
 
             await _send_twilio_debug_payload(websocket, settings, {"type": "error", "detail": f"Unsupported Twilio event: {event}"})
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as exc:
+        log_call_event(
+            logger,
+            "call.disconnected",
+            session_id=session_id,
+            call_id=call_id,
+            metadata={
+                "reason": "websocket_disconnect",
+                "close_code": getattr(exc, "code", None),
+                "streamSid_present": bool(stream_sid),
+                "realtime_active": realtime_active,
+                "realtime_queue_size": realtime_event_queue.qsize(),
+                **realtime_debug_state,
+            },
+            level=logging.WARNING,
+        )
         return
     finally:
         await _cancel_realtime_receive_task(realtime_receive_task)
