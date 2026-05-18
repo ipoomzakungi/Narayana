@@ -241,6 +241,40 @@ def _log_realtime_audio_frame_diagnostic(
     )
 
 
+def _log_twilio_audio_frame_diagnostic(
+    *,
+    session_id: str,
+    call_id: str,
+    stream_sid: str | None,
+    frame,
+    processor: AudioSessionProcessor,
+) -> None:
+    if not _should_log_realtime_audio_frame(frame.sequence):
+        return
+    try:
+        vad_score = round(processor.manager.vad.score(frame), 4)
+    except Exception as exc:
+        vad_score = f"score_error:{exc}"
+    log_call_event(
+        logger,
+        "twilio.audio.frame.diagnostic",
+        session_id=session_id,
+        call_id=call_id,
+        level=logging.WARNING,
+        metadata={
+            "streamSid_present": bool(stream_sid),
+            "sequence": frame.sequence,
+            "encoding": frame.encoding,
+            "sample_rate_hz": frame.sample_rate_hz,
+            "duration_ms": frame.duration_ms,
+            "decoded_byte_length": _decoded_audio_byte_length(frame.audio_base64),
+            "vad_score": vad_score,
+            "vad_threshold": processor.settings.vad_energy_threshold,
+            "assistant_is_speaking": frame.assistant_is_speaking,
+        },
+    )
+
+
 def _realtime_event_payload(
     event_type: str,
     *,
@@ -1298,14 +1332,27 @@ async def _send_tts_media(
         session_id=session_id,
         call_id=call_id,
         metadata={"streamSid": stream_sid, "text_length": len(text), "profile": selected_profile.value, "purpose": purpose},
+        level=logging.WARNING,
     )
     try:
-        result = await service.synthesize_twilio_mulaw(
-            text,
-            profile=selected_profile,
-            session_id=session_id,
-            call_id=call_id,
+        result = await asyncio.wait_for(
+            service.synthesize_twilio_mulaw(
+                text,
+                profile=selected_profile,
+                session_id=session_id,
+                call_id=call_id,
+            ),
+            timeout=8,
         )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "%s.failed session_id=%s call_id=%s streamSid=%s reason=azure_speech_tts_timeout",
+            purpose,
+            session_id,
+            call_id,
+            stream_sid,
+        )
+        return False
     except Exception as exc:
         logger.warning(
             "%s.failed session_id=%s call_id=%s streamSid=%s reason=%s",
@@ -1364,14 +1411,19 @@ async def _send_tts_media(
             exc,
         )
         return False
-    logger.info(
-        "%s.sent session_id=%s call_id=%s streamSid=%s chunk_count=%s estimated_duration_ms=%s",
-        purpose,
-        session_id,
-        call_id,
-        stream_sid,
-        result.payload_count,
-        result.estimated_duration_ms,
+    sent_event_type = "greeting.sent" if purpose == "greeting" else "tts.sent"
+    log_call_event(
+        logger,
+        sent_event_type,
+        session_id=session_id,
+        call_id=call_id,
+        metadata={
+            "streamSid": stream_sid,
+            "chunk_count": result.payload_count,
+            "estimated_duration_ms": result.estimated_duration_ms,
+            "purpose": purpose,
+        },
+        level=logging.WARNING,
     )
     return True
 
@@ -1388,6 +1440,14 @@ async def _send_initial_greeting(
 ) -> None:
     if not settings.enable_twilio_initial_greeting:
         return
+    log_call_event(
+        logger,
+        "greeting.requested",
+        session_id=session_id,
+        call_id=call_id,
+        metadata={"streamSid_present": bool(stream_sid), "text_length": len(settings.twilio_initial_greeting_text)},
+        level=logging.WARNING,
+    )
     await _send_tts_media(
         websocket,
         settings=settings,
@@ -1912,6 +1972,13 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                 except TwilioMediaError as exc:
                     await _send_twilio_debug_payload(websocket, settings, {"type": "error", "detail": str(exc)})
                     continue
+                _log_twilio_audio_frame_diagnostic(
+                    session_id=session_id,
+                    call_id=call_id,
+                    stream_sid=stream_sid,
+                    frame=frame,
+                    processor=processor,
+                )
                 processed_payloads = await processor.process_frame(frame)
                 if any(
                     payload.get("type") == "debug.event"
