@@ -248,6 +248,22 @@ def build_openai_realtime_session_update(
     *,
     input_transcription_enabled: bool | None = None,
 ) -> dict[str, Any]:
+    transcription_enabled = (
+        settings.realtime_input_transcription_enabled
+        if input_transcription_enabled is None
+        else input_transcription_enabled
+    )
+    if settings.azure_realtime_api_version.strip().lower() in {"v1", "ga"}:
+        session = _build_openai_realtime_v1_session(
+            settings,
+            instructions,
+            input_transcription_enabled=transcription_enabled,
+        )
+        return {
+            "type": "session.update",
+            "session": session,
+        }
+
     session: dict[str, Any] = {
         "type": "realtime",
         "instructions": instructions,
@@ -264,16 +280,50 @@ def build_openai_realtime_session_update(
         "tools": [build_realtime_intake_tool()],
         "tool_choice": "auto",
     }
-    transcription_enabled = (
-        settings.realtime_input_transcription_enabled
-        if input_transcription_enabled is None
-        else input_transcription_enabled
-    )
     if transcription_enabled:
         session["input_audio_transcription"] = {"model": "whisper-1"}
     return {
         "type": "session.update",
         "session": session,
+    }
+
+
+def _build_openai_realtime_v1_session(
+    settings: Settings,
+    instructions: str,
+    *,
+    input_transcription_enabled: bool,
+) -> dict[str, Any]:
+    input_format = (
+        {"type": "audio/pcmu"}
+        if settings.effective_realtime_input_audio_format == "g711_ulaw"
+        else {"type": "audio/pcm", "rate": 24000}
+    )
+    audio_input: dict[str, Any] = {
+        "format": input_format,
+        "turn_detection": {
+            "type": "server_vad",
+            "threshold": 0.5,
+            "prefix_padding_ms": 300,
+            "silence_duration_ms": 500,
+            "create_response": True,
+            "interrupt_response": True,
+        },
+    }
+    if input_transcription_enabled:
+        audio_input["transcription"] = {"model": "whisper-1"}
+    return {
+        "type": "realtime",
+        "instructions": instructions,
+        "output_modalities": ["audio"],
+        "audio": {
+            "input": audio_input,
+            "output": {
+                "format": {"type": "audio/pcmu"},
+            },
+        },
+        "tools": [build_realtime_intake_tool()],
+        "tool_choice": "auto",
     }
 
 

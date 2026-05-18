@@ -83,6 +83,8 @@ def test_openai_realtime_uri_uses_ga_model_format_when_requested() -> None:
         )
     )
 
+    assert uri == "wss://aoai.example.openai.azure.com/openai/v1/realtime?model=gpt-realtime-1.5-prod"
+
 
 def realtime_g711_settings(provider: str = "azure_openai_realtime") -> Settings:
     return Settings(
@@ -97,8 +99,6 @@ def realtime_g711_settings(provider: str = "azure_openai_realtime") -> Settings:
         realtime_input_audio_format="g711_ulaw",
         realtime_twilio_audio_passthrough=True,
     )
-
-    assert uri == "wss://aoai.example.openai.azure.com/openai/v1/realtime?model=gpt-realtime-1.5-prod"
 
 
 def test_voice_live_uri_adds_model_when_missing() -> None:
@@ -169,6 +169,40 @@ def test_realtime_session_update_can_enable_input_transcription() -> None:
     )
 
     assert payload["session"]["input_audio_transcription"] == {"model": "whisper-1"}
+
+
+def test_openai_realtime_v1_session_update_uses_nested_audio_schema() -> None:
+    payload = build_openai_realtime_session_update(
+        Settings(
+            enable_realtime_voice=True,
+            realtime_provider="azure_openai_realtime",
+            azure_realtime_endpoint="https://aoai.example.openai.azure.com",
+            azure_realtime_api_key="dummy-key",
+            azure_realtime_deployment="gpt-realtime-1.5-prod",
+            azure_realtime_api_version="v1",
+            realtime_input_audio_format="g711_ulaw",
+            realtime_twilio_audio_passthrough=True,
+            realtime_input_transcription_enabled=True,
+        ),
+        "crisis only",
+    )
+
+    session = payload["session"]
+    assert payload["type"] == "session.update"
+    assert session["type"] == "realtime"
+    assert session["instructions"] == "crisis only"
+    assert "modalities" not in session
+    assert "input_audio_format" not in session
+    assert "output_audio_format" not in session
+    assert "input_audio_transcription" not in session
+    assert session["output_modalities"] == ["audio"]
+    assert session["audio"]["input"]["format"] == {"type": "audio/pcmu"}
+    assert session["audio"]["input"]["transcription"] == {"model": "whisper-1"}
+    assert session["audio"]["input"]["turn_detection"]["create_response"] is True
+    assert session["audio"]["input"]["turn_detection"]["interrupt_response"] is True
+    assert session["audio"]["output"]["format"] == {"type": "audio/pcmu"}
+    assert session["tools"][0]["name"] == "crisis_intake_update"
+    assert session["tool_choice"] == "auto"
 
 
 @pytest.mark.asyncio
