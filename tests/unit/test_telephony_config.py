@@ -181,6 +181,7 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     assert settings.call_audit_log_transcripts is False
     assert settings.call_audit_max_sessions == 12
     assert settings.twilio_force_hangup_enabled is True
+    assert settings.twilio_debug_payloads_enabled is False
     assert settings.enable_realtime_voice is True
     assert settings.normalized_realtime_provider == "azure_openai_realtime"
     assert settings.azure_openai_realtime_configured is True

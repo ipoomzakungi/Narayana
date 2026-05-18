@@ -124,12 +124,17 @@ class AzureOpenAIRealtimeProvider(BaseRealtimeProvider):
         if event_type in {"response.created", "response.started"}:
             return self._event(
                 RealtimeAudioEventType.RESPONSE_STARTED,
-                metadata={"provider_event_type": event_type},
+                metadata=_response_metadata(message, event_type=event_type),
+            )
+        if event_type in {"response.audio.done", "response.output_audio.done"}:
+            return self._event(
+                RealtimeAudioEventType.RESPONSE_COMPLETED,
+                metadata={**_response_metadata(message, event_type=event_type), "audio_output_done": True},
             )
         if event_type in {"response.done", "response.completed"}:
             return self._event(
                 RealtimeAudioEventType.RESPONSE_COMPLETED,
-                metadata={"provider_event_type": event_type},
+                metadata=_response_metadata(message, event_type=event_type),
             )
         if event_type in {"response.audio.delta", "response.output_audio.delta"}:
             audio = message.get("delta") or message.get("audio")
@@ -245,3 +250,17 @@ def _parse_tool_arguments(raw_arguments) -> dict:
     except json.JSONDecodeError:
         return {"raw_arguments": raw_arguments}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _response_metadata(message: dict, *, event_type: str) -> dict:
+    metadata = {"provider_event_type": event_type}
+    response = message.get("response") if isinstance(message.get("response"), dict) else {}
+    for source_key, target_key in (
+        ("id", "response_id"),
+        ("status", "response_status"),
+        ("status_details", "response_status_details"),
+    ):
+        value = response.get(source_key)
+        if value not in (None, ""):
+            metadata[target_key] = value
+    return metadata

@@ -116,6 +116,7 @@ class Settings:
     call_end_on_repeated_off_topic: bool = True
     call_end_on_no_reply: bool = True
     twilio_force_hangup_enabled: bool = False
+    twilio_debug_payloads_enabled: bool = True
     enable_twilio_tts_response: bool = False
     enable_twilio_initial_greeting: bool = False
     twilio_initial_greeting_text: str = DEFAULT_TWILIO_INITIAL_GREETING
@@ -210,6 +211,7 @@ class Settings:
             call_end_on_repeated_off_topic=_truthy(os.getenv("CALL_END_ON_REPEATED_OFF_TOPIC"), default=True),
             call_end_on_no_reply=_truthy(os.getenv("CALL_END_ON_NO_REPLY"), default=True),
             twilio_force_hangup_enabled=_truthy(os.getenv("TWILIO_FORCE_HANGUP_ENABLED"), default=False),
+            twilio_debug_payloads_enabled=_truthy(os.getenv("TWILIO_DEBUG_PAYLOADS_ENABLED"), default=False),
             enable_twilio_tts_response=_truthy(os.getenv("ENABLE_TWILIO_TTS_RESPONSE"), default=False),
             enable_twilio_initial_greeting=_truthy(os.getenv("ENABLE_TWILIO_INITIAL_GREETING"), default=False),
             twilio_initial_greeting_text=os.getenv("TWILIO_INITIAL_GREETING_TEXT", DEFAULT_TWILIO_INITIAL_GREETING),

@@ -266,6 +266,11 @@ def _realtime_event_payload(
     }
 
 
+async def _send_twilio_debug_payload(websocket: WebSocket, settings, payload: dict) -> None:
+    if settings.twilio_debug_payloads_enabled:
+        await websocket.send_json(payload)
+
+
 def _log_realtime(
     *,
     settings,
@@ -339,7 +344,9 @@ async def _send_realtime_fallback(
         warnings=warnings,
         fallback_reason=reason,
     )
-    await websocket.send_json(
+    await _send_twilio_debug_payload(
+        websocket,
+        settings,
         _realtime_event_payload(
             "fallback",
             session_id=session_id,
@@ -348,7 +355,7 @@ async def _send_realtime_fallback(
             latency_ms=latency_ms,
             warnings=warnings,
             fallback_reason=reason,
-        )
+        ),
     )
 
 
@@ -642,7 +649,7 @@ async def _process_realtime_intake_text(
         )
     )
     payload = _intake_response_payload(response, transcript=clean)
-    await websocket.send_json(payload)
+    await _send_twilio_debug_payload(websocket, settings, payload)
     if response.action != IntakeAction.ASK_FOLLOWUP and response.created_case is not None:
         store = get_intake_session_store(settings.assistant_max_followups)
         store.mark_final(session_id, response.created_case.case.case_id, response.partial_state.status)
@@ -1102,7 +1109,9 @@ async def _handle_realtime_event(
         warnings=event.warnings,
         metadata=event.metadata,
     )
-    await websocket.send_json(
+    await _send_twilio_debug_payload(
+        websocket,
+        settings,
         _realtime_event_payload(
             event_type,
             session_id=session_id,
@@ -1112,7 +1121,7 @@ async def _handle_realtime_event(
             latency_ms=event.latency_ms,
             warnings=event.warnings,
             metadata=event.metadata,
-        )
+        ),
     )
     if speaker is not None and event.text:
         is_delta = event.event_type in {
@@ -1150,7 +1159,7 @@ async def _handle_realtime_event(
                 reason="realtime_structured_extraction",
             )
             if payload is not None:
-                await websocket.send_json(payload)
+                await _send_twilio_debug_payload(websocket, settings, payload)
             await _send_realtime_tool_result(
                 provider_client=provider_client,
                 settings=settings,
@@ -1171,6 +1180,13 @@ async def _handle_realtime_event(
             )
             return True
         await websocket.send_json(build_twilio_media_event(stream_sid, event.audio_base64))
+    if (
+        event.event_type == RealtimeAudioEventType.RESPONSE_COMPLETED
+        and event.metadata.get("audio_output_done")
+        and stream_sid
+    ):
+        mark_name = f"narayana_realtime_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}"
+        await websocket.send_json(build_twilio_mark_event(stream_sid, mark_name))
     return False
 
 
@@ -1454,7 +1470,7 @@ async def _send_no_reply_prompt(
             text=response_text,
             metadata={"reason": "no_reply"},
         )
-        await websocket.send_json(payload)
+        await _send_twilio_debug_payload(websocket, settings, payload)
         await _send_tts_media(
             websocket,
             settings=settings,
@@ -1565,7 +1581,11 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                     return
                 continue
             except ValueError as exc:
-                await websocket.send_json({"type": "error", "detail": f"Malformed Twilio media message: {exc}"})
+                await _send_twilio_debug_payload(
+                    websocket,
+                    settings,
+                    {"type": "error", "detail": f"Malformed Twilio media message: {exc}"},
+                )
                 continue
 
             event = message.get("event")
@@ -1608,7 +1628,9 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         call_started_at=metadata.started_at,
                         caller_phone=metadata.from_number,
                     )
-                await websocket.send_json(
+                await _send_twilio_debug_payload(
+                    websocket,
+                    settings,
                     {
                         "type": "session.started",
                         "session_id": session_id,
@@ -1617,7 +1639,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         "source_input_mode": VoiceInputMode.TWILIO_CALL.value,
                         "call_metadata": metadata.model_dump(mode="json"),
                         "realtime": _realtime_debug_payload(realtime_selection),
-                    }
+                    },
                 )
                 log_call_event(
                     logger,
@@ -1663,7 +1685,9 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                             latency_ms=connection.latency_ms,
                             warnings=connection.warnings,
                         )
-                        await websocket.send_json(
+                        await _send_twilio_debug_payload(
+                            websocket,
+                            settings,
                             _realtime_event_payload(
                                 "connected",
                                 session_id=session_id,
@@ -1671,7 +1695,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                                 provider=connection.provider.value,
                                 latency_ms=connection.latency_ms,
                                 warnings=connection.warnings,
-                            )
+                            ),
                         )
                     else:
                         await _send_realtime_fallback(
@@ -1741,14 +1765,16 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         tts_status="completed",
                         metadata={"streamSid": stream_sid, "mark_name": mark_name},
                     )
-                    await websocket.send_json(
+                    await _send_twilio_debug_payload(
+                        websocket,
+                        settings,
                         {
                             "type": "assistant.playback.completed",
                             "session_id": session_id,
                             "call_id": call_id,
                             "stream_sid": stream_sid,
                             "mark_name": mark_name,
-                        }
+                        },
                     )
                 else:
                     logger.warning(
@@ -1774,7 +1800,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                             assistant_is_speaking=lifecycle_state.assistant_speaking,
                         )
                     except TwilioMediaError as exc:
-                        await websocket.send_json({"type": "error", "detail": str(exc)})
+                        await _send_twilio_debug_payload(websocket, settings, {"type": "error", "detail": str(exc)})
                         continue
                     _log_realtime_audio_frame_diagnostic(
                         settings=settings,
@@ -1799,7 +1825,9 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                                 "audio_format": realtime_frame.encoding,
                             },
                         )
-                        await websocket.send_json(
+                        await _send_twilio_debug_payload(
+                            websocket,
+                            settings,
                             _realtime_event_payload(
                                 "audio.input.sent",
                                 session_id=session_id,
@@ -1811,7 +1839,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                                     "sequence": realtime_frame.sequence,
                                     "audio_format": realtime_frame.encoding,
                                 },
-                            )
+                            ),
                         )
                         await asyncio.sleep(0)
                         fallback_to_current = await _drain_realtime_event_queue(
@@ -1850,7 +1878,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         assistant_is_speaking=lifecycle_state.assistant_speaking,
                     )
                 except TwilioMediaError as exc:
-                    await websocket.send_json({"type": "error", "detail": str(exc)})
+                    await _send_twilio_debug_payload(websocket, settings, {"type": "error", "detail": str(exc)})
                     continue
                 processed_payloads = await processor.process_frame(frame)
                 if any(
@@ -1875,7 +1903,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                     lifecycle_service.track_caller_speech(lifecycle_state)
                 for payload in processed_payloads:
                     payload = _with_tts_debug_metadata(payload, settings, stream_sid)
-                    await websocket.send_json(payload)
+                    await _send_twilio_debug_payload(websocket, settings, payload)
                     await _maybe_send_tts_response(
                         websocket,
                         payload=payload,
@@ -1903,11 +1931,11 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                     realtime_receive_task = None
                     await realtime_provider.close()
                     realtime_provider = None
-                await websocket.send_json({"type": "session.closed", "session_id": session_id})
+                await _send_twilio_debug_payload(websocket, settings, {"type": "session.closed", "session_id": session_id})
                 await websocket.close()
                 return
 
-            await websocket.send_json({"type": "error", "detail": f"Unsupported Twilio event: {event}"})
+            await _send_twilio_debug_payload(websocket, settings, {"type": "error", "detail": f"Unsupported Twilio event: {event}"})
     except WebSocketDisconnect:
         return
     finally:
