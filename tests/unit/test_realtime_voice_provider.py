@@ -135,6 +135,7 @@ def test_openai_realtime_session_update_uses_twilio_compatible_audio_and_tool() 
 
     session = payload["session"]
     assert payload["type"] == "session.update"
+    assert session["type"] == "realtime"
     assert session["instructions"] == "crisis only"
     assert session["input_audio_format"] == "pcm16"
     assert session["output_audio_format"] == "g711_ulaw"

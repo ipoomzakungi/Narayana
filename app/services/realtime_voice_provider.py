@@ -249,6 +249,7 @@ def build_openai_realtime_session_update(
     input_transcription_enabled: bool | None = None,
 ) -> dict[str, Any]:
     session: dict[str, Any] = {
+        "type": "realtime",
         "instructions": instructions,
         "modalities": ["audio", "text"],
         "input_audio_format": settings.effective_realtime_input_audio_format,
