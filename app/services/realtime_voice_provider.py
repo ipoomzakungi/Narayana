@@ -251,7 +251,6 @@ def build_openai_realtime_session_update(
     session: dict[str, Any] = {
         "type": "realtime",
         "instructions": instructions,
-        "modalities": ["audio", "text"],
         "input_audio_format": settings.effective_realtime_input_audio_format,
         "output_audio_format": "g711_ulaw",
         "turn_detection": {
