@@ -495,6 +495,85 @@ async def _cancel_realtime_receive_task(task: asyncio.Task | None) -> None:
         return
 
 
+async def _realtime_event_dispatch_loop(
+    websocket: WebSocket,
+    *,
+    settings,
+    provider: RealtimeVoiceProvider,
+    queue: asyncio.Queue[RealtimeAudioEvent],
+    stream_sid_ref,
+    session_id: str,
+    call_id: str,
+    debug_state: dict,
+    fallback_event: asyncio.Event,
+) -> None:
+    while True:
+        try:
+            event = await queue.get()
+            fallback = await _handle_realtime_event(
+                websocket,
+                settings=settings,
+                provider_client=provider,
+                event=event,
+                stream_sid=stream_sid_ref(),
+                session_id=session_id,
+                call_id=call_id,
+                debug_state=debug_state,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log_realtime(
+                settings=settings,
+                event_type="dispatch.error",
+                session_id=session_id,
+                call_id=call_id,
+                provider=provider.mode.value,
+                warnings=[f"Realtime event dispatch failed: {exc}"],
+                fallback_reason="dispatch_error",
+            )
+            fallback_event.set()
+            return
+        if fallback:
+            fallback_event.set()
+            return
+
+
+async def _realtime_watchdog_loop(
+    *,
+    settings,
+    provider: RealtimeVoiceProvider,
+    session_id: str,
+    call_id: str,
+    debug_state: dict,
+    fallback_event: asyncio.Event,
+) -> None:
+    while not fallback_event.is_set():
+        try:
+            await _maybe_force_realtime_turn_commit(
+                settings=settings,
+                provider=provider,
+                session_id=session_id,
+                call_id=call_id,
+                debug_state=debug_state,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log_realtime(
+                settings=settings,
+                event_type="watchdog.error",
+                session_id=session_id,
+                call_id=call_id,
+                provider=provider.mode.value,
+                warnings=[f"Realtime watchdog failed: {exc}"],
+                fallback_reason="watchdog_error",
+            )
+            fallback_event.set()
+            return
+        await asyncio.sleep(0.25)
+
+
 async def _drain_realtime_event_queue(
     websocket: WebSocket,
     *,
@@ -1765,6 +1844,9 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
     realtime_active = False
     realtime_event_queue: asyncio.Queue[RealtimeAudioEvent] = asyncio.Queue()
     realtime_receive_task: asyncio.Task | None = None
+    realtime_dispatch_task: asyncio.Task | None = None
+    realtime_watchdog_task: asyncio.Task | None = None
+    realtime_fallback_event = asyncio.Event()
     realtime_debug_state: dict = {}
     processor = AudioSessionProcessor(
         settings=settings,
@@ -1803,23 +1885,16 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                 continue
 
             event = message.get("event")
-            if event != "media" and realtime_active and realtime_provider is not None and not realtime_event_queue.empty():
-                fallback_to_current = await _drain_realtime_event_queue(
-                    websocket,
-                    settings=settings,
-                    provider=realtime_provider,
-                    queue=realtime_event_queue,
-                    stream_sid=stream_sid,
-                    session_id=session_id,
-                    call_id=call_id,
-                    debug_state=realtime_debug_state,
-                )
-                if fallback_to_current:
-                    realtime_active = False
-                    await _cancel_realtime_receive_task(realtime_receive_task)
-                    realtime_receive_task = None
-                    await realtime_provider.close()
-                    realtime_provider = None
+            if realtime_active and realtime_fallback_event.is_set() and realtime_provider is not None:
+                realtime_active = False
+                await _cancel_realtime_receive_task(realtime_watchdog_task)
+                realtime_watchdog_task = None
+                await _cancel_realtime_receive_task(realtime_dispatch_task)
+                realtime_dispatch_task = None
+                await _cancel_realtime_receive_task(realtime_receive_task)
+                realtime_receive_task = None
+                await realtime_provider.close()
+                realtime_provider = None
 
             if event == "connected":
                 continue
@@ -1883,6 +1958,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         realtime_provider = realtime_selection.provider
                         realtime_active = True
                         realtime_event_queue = asyncio.Queue()
+                        realtime_fallback_event = asyncio.Event()
                         realtime_debug_state = {
                             "provider": realtime_provider.mode.value,
                             "response_started": False,
@@ -1895,6 +1971,29 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                                 queue=realtime_event_queue,
                                 session_id=session_id,
                                 call_id=call_id,
+                            )
+                        )
+                        realtime_dispatch_task = asyncio.create_task(
+                            _realtime_event_dispatch_loop(
+                                websocket,
+                                settings=settings,
+                                provider=realtime_provider,
+                                queue=realtime_event_queue,
+                                stream_sid_ref=lambda: stream_sid,
+                                session_id=session_id,
+                                call_id=call_id,
+                                debug_state=realtime_debug_state,
+                                fallback_event=realtime_fallback_event,
+                            )
+                        )
+                        realtime_watchdog_task = asyncio.create_task(
+                            _realtime_watchdog_loop(
+                                settings=settings,
+                                provider=realtime_provider,
+                                session_id=session_id,
+                                call_id=call_id,
+                                debug_state=realtime_debug_state,
+                                fallback_event=realtime_fallback_event,
                             )
                         )
                         _log_realtime(
@@ -2070,25 +2169,14 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                             ),
                         )
                         await asyncio.sleep(0)
-                        fallback_to_current = await _drain_realtime_event_queue(
-                            websocket,
+                        await _maybe_force_realtime_turn_commit(
                             settings=settings,
                             provider=realtime_provider,
-                            queue=realtime_event_queue,
-                            stream_sid=stream_sid,
                             session_id=session_id,
                             call_id=call_id,
                             debug_state=realtime_debug_state,
                         )
-                        if not fallback_to_current:
-                            await _maybe_force_realtime_turn_commit(
-                                settings=settings,
-                                provider=realtime_provider,
-                                session_id=session_id,
-                                call_id=call_id,
-                                debug_state=realtime_debug_state,
-                            )
-                        if not fallback_to_current:
+                        if not realtime_fallback_event.is_set():
                             continue
                     else:
                         await _send_realtime_fallback(
@@ -2102,6 +2190,10 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                             latency_ms=send_result.latency_ms,
                         )
                     realtime_active = False
+                    await _cancel_realtime_receive_task(realtime_watchdog_task)
+                    realtime_watchdog_task = None
+                    await _cancel_realtime_receive_task(realtime_dispatch_task)
+                    realtime_dispatch_task = None
                     await _cancel_realtime_receive_task(realtime_receive_task)
                     realtime_receive_task = None
                     await realtime_provider.close()
@@ -2198,6 +2290,10 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         )
                     )
                 if realtime_provider is not None:
+                    await _cancel_realtime_receive_task(realtime_watchdog_task)
+                    realtime_watchdog_task = None
+                    await _cancel_realtime_receive_task(realtime_dispatch_task)
+                    realtime_dispatch_task = None
                     await _cancel_realtime_receive_task(realtime_receive_task)
                     realtime_receive_task = None
                     await realtime_provider.close()
@@ -2225,6 +2321,8 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
         )
         return
     finally:
+        await _cancel_realtime_receive_task(realtime_watchdog_task)
+        await _cancel_realtime_receive_task(realtime_dispatch_task)
         await _cancel_realtime_receive_task(realtime_receive_task)
         if realtime_provider is not None:
             await realtime_provider.close()

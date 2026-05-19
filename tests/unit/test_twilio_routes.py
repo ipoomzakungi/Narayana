@@ -579,6 +579,59 @@ async def test_realtime_transcript_delta_can_be_persisted_in_debug() -> None:
 
 
 @pytest.mark.asyncio
+async def test_realtime_dispatch_loop_forwards_audio_without_twilio_media() -> None:
+    import asyncio
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    websocket = FakeWebSocket()
+    provider = FakeRealtimeToolProvider()
+    queue: asyncio.Queue[RealtimeAudioEvent] = asyncio.Queue()
+    fallback_event = asyncio.Event()
+    task = asyncio.create_task(
+        routes_twilio._realtime_event_dispatch_loop(
+            websocket,
+            settings=Settings(
+                enable_realtime_voice=True,
+                realtime_provider="azure_openai_realtime",
+                twilio_debug_payloads_enabled=False,
+            ),
+            provider=provider,
+            queue=queue,
+            stream_sid_ref=lambda: "MZ123",
+            session_id="twilio_CA_DISPATCH",
+            call_id="CA_DISPATCH",
+            debug_state={},
+            fallback_event=fallback_event,
+        )
+    )
+
+    await queue.put(
+        RealtimeAudioEvent(
+            event_type=RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED,
+            provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+            audio_base64="abcd",
+            audio_format=RealtimeAudioFormat.MULAW_8KHZ,
+            metadata={"provider_event_type": "response.output_audio.delta"},
+        )
+    )
+    for _ in range(20):
+        if websocket.sent:
+            break
+        await asyncio.sleep(0.01)
+    await routes_twilio._cancel_realtime_receive_task(task)
+
+    assert fallback_event.is_set() is False
+    assert websocket.sent == [
+        {
+            "event": "media",
+            "streamSid": "MZ123",
+            "media": {"payload": "abcd"},
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_realtime_structured_extraction_creates_case_and_sends_tool_result(tmp_path) -> None:
     import app.api.routes_twilio as routes_twilio
 

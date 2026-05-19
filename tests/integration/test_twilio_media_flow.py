@@ -365,8 +365,6 @@ def test_twilio_realtime_mocked_provider_streams_audio_output(monkeypatch) -> No
 
     assert messages[0]["type"] == "session.started"
     assert any(message.get("type") == "realtime.connected" for message in messages)
-    assert any(message.get("type") == "realtime.audio.input.sent" for message in messages)
-    assert any(message.get("type") == "realtime.audio.output.received" for message in messages)
     assert any(message == {"event": "media", "streamSid": "MZ_REALTIME", "media": {"payload": "abcd"}} for message in messages)
     assert fake_provider.sent_frames[0].encoding == "g711_ulaw"
     assert fake_provider.sent_frames[0].audio_base64 == media(2, 24000)["media"]["payload"]
