@@ -126,6 +126,22 @@ class AzureVoiceLiveRealtimeProvider(BaseRealtimeProvider):
                 message,
                 provider_event_type=event_type,
             )
+        if event_type in {
+            "conversation.item.input_audio_transcription.failed",
+            "input_audio_buffer.transcription.failed",
+            "input_audio_transcription.failed",
+        }:
+            error = message.get("error") if isinstance(message.get("error"), dict) else {}
+            warning = str(error.get("message") or "Azure Voice Live caller transcription failed.")
+            return self._event(
+                RealtimeAudioEventType.CALLER_TRANSCRIPTION_FAILED,
+                warnings=[warning],
+                metadata={
+                    "provider_event_type": event_type,
+                    "item_id": message.get("item_id"),
+                    "error": error,
+                },
+            )
         if event_type in {"response.audio_transcript.delta", "response.output_audio_transcript.delta", "response.text.delta"}:
             return self._transcript_event(
                 RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_DELTA,

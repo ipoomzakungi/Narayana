@@ -284,6 +284,11 @@ async def test_openai_provider_normalizes_transcript_and_tool_events() -> None:
             {"type": "conversation.item.input_audio_transcription.completed", "transcript": "ไฟไหม้ที่หาดใหญ่"},
             {"type": "response.audio_transcript.delta", "delta": "อยู่ในที่ปลอดภัย"},
             {
+                "type": "conversation.item.input_audio_transcription.failed",
+                "item_id": "item_failed",
+                "error": {"message": "transcription unavailable"},
+            },
+            {
                 "type": "response.function_call_arguments.done",
                 "name": "crisis_intake_update",
                 "arguments": json.dumps(
@@ -310,6 +315,7 @@ async def test_openai_provider_normalizes_transcript_and_tool_events() -> None:
     await provider.connect(session_id="twilio_CA123", call_id="CA123", instructions="crisis only")
     caller = await provider.receive_audio_event()
     assistant = await provider.receive_audio_event()
+    failed = await provider.receive_audio_event()
     tool = await provider.receive_audio_event()
 
     assert caller is not None
@@ -317,6 +323,10 @@ async def test_openai_provider_normalizes_transcript_and_tool_events() -> None:
     assert caller.text == "ไฟไหม้ที่หาดใหญ่"
     assert assistant is not None
     assert assistant.event_type == RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_DELTA
+    assert failed is not None
+    assert failed.event_type == RealtimeAudioEventType.CALLER_TRANSCRIPTION_FAILED
+    assert failed.metadata["item_id"] == "item_failed"
+    assert failed.warnings == ["transcription unavailable"]
     assert tool is not None
     assert tool.event_type == RealtimeAudioEventType.STRUCTURED_EXTRACTION
     assert tool.metadata["tool_call_id"] == "call_abc"

@@ -838,10 +838,10 @@ def _append_realtime_transcript_turn(
     text: str,
     is_delta: bool,
     metadata: dict | None = None,
-) -> None:
+) -> bool:
     clean = text.strip()
     if not clean:
-        return
+        return False
     store = get_intake_session_store(settings.assistant_max_followups)
     state = store.get_or_create(
         session_id,
@@ -853,6 +853,17 @@ def _append_realtime_transcript_turn(
     state.realtime_model_or_deployment = _realtime_model_or_deployment(settings, provider)
     if speaker == ConversationSpeaker.CALLER:
         state.caller_tone = _caller_tone(clean)
+    item_id = metadata.get("item_id") if isinstance(metadata, dict) else None
+    if item_id and not is_delta:
+        for existing in state.realtime_transcript_turns:
+            existing_metadata = existing.get("metadata") if isinstance(existing, dict) else {}
+            if (
+                existing.get("speaker") == speaker.value
+                and not existing.get("is_delta")
+                and isinstance(existing_metadata, dict)
+                and existing_metadata.get("item_id") == item_id
+            ):
+                return False
     turn = {
         "speaker": speaker.value,
         "text": clean,
@@ -862,6 +873,41 @@ def _append_realtime_transcript_turn(
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     state.realtime_transcript_turns.append(turn)
+    store.save(state)
+    return True
+
+
+def _record_realtime_transcription_failed(
+    *,
+    settings,
+    session_id: str,
+    call_id: str,
+    provider: str,
+    metadata: dict | None = None,
+    warnings: list[str] | None = None,
+) -> None:
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.get_or_create(
+        session_id,
+        call_id=call_id,
+        source_input_mode=VoiceInputMode.TWILIO_CALL.value,
+        max_followups=settings.assistant_max_followups,
+    )
+    state.realtime_provider = provider
+    state.realtime_model_or_deployment = _realtime_model_or_deployment(settings, provider)
+    state.human_review_required = True
+    state.recommended_operator_action = "operator_review_transcription_failed"
+    state.decision_audit.append(
+        {
+            "action": "realtime_transcription_failed",
+            "caller_audio_received": True,
+            "transcription_failed": True,
+            "operator_review_required": True,
+            "warnings": warnings or [],
+            "metadata": metadata or {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
     store.save(state)
 
 
@@ -973,8 +1019,22 @@ def _schedule_realtime_intake_processing(
     session_id: str,
     call_id: str,
     text: str,
+    item_id: str | None,
     debug_state: dict | None,
 ) -> None:
+    if debug_state is not None and item_id:
+        intake_key = f"{call_id}:{item_id}"
+        processed = debug_state.setdefault("background_intake_item_ids", [])
+        if intake_key in processed:
+            log_call_event(
+                logger,
+                "realtime.background_intake.duplicate_ignored",
+                session_id=session_id,
+                call_id=call_id,
+                metadata={"item_id": item_id},
+            )
+            return
+        processed.append(intake_key)
     task = asyncio.create_task(
         _process_realtime_intake_text(
             websocket=None,
@@ -1011,7 +1071,7 @@ def _schedule_realtime_intake_processing(
         "realtime.background_intake.queued",
         session_id=session_id,
         call_id=call_id,
-        metadata={"text_length": len(text)},
+        metadata={"text_length": len(text), "item_id": item_id},
     )
 
 
@@ -1540,13 +1600,23 @@ async def _handle_realtime_event(
             metadata=event.metadata,
         ),
     )
+    if event.event_type == RealtimeAudioEventType.CALLER_TRANSCRIPTION_FAILED:
+        _record_realtime_transcription_failed(
+            settings=settings,
+            session_id=session_id,
+            call_id=call_id,
+            provider=provider,
+            metadata=event.metadata,
+            warnings=event.warnings,
+        )
     if speaker is not None and event.text:
         is_delta = event.event_type in {
             RealtimeAudioEventType.CALLER_TRANSCRIPT_DELTA,
             RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_DELTA,
         }
+        appended = True
         if not is_delta or settings.debug_realtime_deltas:
-            _append_realtime_transcript_turn(
+            appended = _append_realtime_transcript_turn(
                 settings=settings,
                 session_id=session_id,
                 call_id=call_id,
@@ -1556,12 +1626,13 @@ async def _handle_realtime_event(
                 is_delta=is_delta,
                 metadata=event.metadata,
             )
-        if event.event_type == RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED:
+        if event.event_type == RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED and appended:
             _schedule_realtime_intake_processing(
                 settings=settings,
                 session_id=session_id,
                 call_id=call_id,
                 text=event.text,
+                item_id=str(event.metadata.get("item_id")) if event.metadata.get("item_id") else None,
                 debug_state=debug_state,
             )
     if event.event_type == RealtimeAudioEventType.STRUCTURED_EXTRACTION:

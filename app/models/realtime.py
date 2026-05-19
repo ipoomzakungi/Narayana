@@ -31,6 +31,7 @@ class RealtimeAudioEventType(StrEnum):
     OUTPUT_AUDIO_RECEIVED = "audio.output.received"
     CALLER_TRANSCRIPT_DELTA = "transcript.caller.delta"
     CALLER_TRANSCRIPT_COMPLETED = "transcript.caller.completed"
+    CALLER_TRANSCRIPTION_FAILED = "transcript.caller.failed"
     ASSISTANT_TRANSCRIPT_DELTA = "transcript.assistant.delta"
     ASSISTANT_TRANSCRIPT_COMPLETED = "transcript.assistant.completed"
     STRUCTURED_EXTRACTION = "structured.extraction"

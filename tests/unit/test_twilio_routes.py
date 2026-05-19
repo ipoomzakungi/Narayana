@@ -503,6 +503,7 @@ async def test_handle_realtime_transcript_creates_case(tmp_path) -> None:
         event_type=RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED,
         provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
         text="ไฟไหม้ที่หาดใหญ่ มีควันไฟ มีคนบาดเจ็บ 2 คน",
+        metadata={"item_id": "item_fire"},
     )
     debug_state = {}
 
@@ -534,6 +535,83 @@ async def test_handle_realtime_transcript_creates_case(tmp_path) -> None:
     assert state.caller_tone in {"unknown", "urgent", "distressed"}
     assert state.human_review_required is True
     assert state.realtime_transcript_turns[0]["text"] == event.text
+    assert state.realtime_transcript_turns[0]["metadata"]["item_id"] == "item_fire"
+
+
+@pytest.mark.asyncio
+async def test_realtime_transcript_completed_duplicate_item_does_not_duplicate_intake(tmp_path) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    websocket = FakeWebSocket()
+    settings = Settings(
+        use_mock_services=True,
+        enable_realtime_voice=True,
+        realtime_provider="azure_openai_realtime",
+        azure_realtime_deployment="gpt-realtime",
+        case_store_path=str(tmp_path / "cases.json"),
+    )
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        text="ไฟไหม้ที่หาดใหญ่ มีควันไฟ มีคนบาดเจ็บ 2 คน",
+        metadata={"item_id": "item_same"},
+    )
+    debug_state = {}
+
+    for _ in range(2):
+        await routes_twilio._handle_realtime_event(
+            websocket,
+            settings=settings,
+            event=event,
+            stream_sid="MZ123",
+            session_id="twilio_CA_REALTIME_DUP_ITEM",
+            call_id="CA_REALTIME_DUP_ITEM",
+            debug_state=debug_state,
+        )
+    await asyncio.gather(*debug_state["background_intake_tasks"])
+
+    state = get_intake_session_store().snapshot("twilio_CA_REALTIME_DUP_ITEM")
+    assert state is not None
+    assert len(state.realtime_transcript_turns) == 1
+    assert len(state.conversation_turns) == 2
+    assert debug_state["background_intake_item_ids"] == ["CA_REALTIME_DUP_ITEM:item_same"]
+
+
+@pytest.mark.asyncio
+async def test_realtime_transcription_failed_marks_operator_review() -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    websocket = FakeWebSocket()
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.CALLER_TRANSCRIPTION_FAILED,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        warnings=["transcription unavailable"],
+        metadata={
+            "provider_event_type": "conversation.item.input_audio_transcription.failed",
+            "item_id": "item_failed",
+            "error": {"message": "transcription unavailable"},
+        },
+    )
+
+    fallback = await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=Settings(call_audit_enabled=True),
+        event=event,
+        stream_sid="MZ123",
+        session_id="twilio_CA_REALTIME_TX_FAIL",
+        call_id="CA_REALTIME_TX_FAIL",
+    )
+
+    assert fallback is False
+    assert websocket.sent[0]["type"] == "realtime.transcript.caller.failed"
+    state = get_intake_session_store().snapshot("twilio_CA_REALTIME_TX_FAIL")
+    assert state is not None
+    assert state.human_review_required is True
+    assert state.recommended_operator_action == "operator_review_transcription_failed"
+    assert state.decision_audit[-1]["caller_audio_received"] is True
+    assert state.decision_audit[-1]["transcription_failed"] is True
 
 
 @pytest.mark.asyncio
