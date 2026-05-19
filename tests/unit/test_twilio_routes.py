@@ -77,11 +77,18 @@ class FakeRealtimeToolProvider:
 
     def __init__(self) -> None:
         self.tool_results: list[dict] = []
+        self.created_responses: list[str | None] = []
 
     async def send_tool_result(self, *, tool_call_id: str | None, result: dict):
         from app.models.realtime import RealtimeSendResult
 
         self.tool_results.append({"tool_call_id": tool_call_id, "result": result})
+        return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=2)
+
+    async def create_response(self, *, instructions: str | None = None):
+        from app.models.realtime import RealtimeSendResult
+
+        self.created_responses.append(instructions)
         return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=2)
 
 
@@ -436,6 +443,55 @@ async def test_handle_realtime_error_sends_fallback_and_logs(caplog) -> None:
 
 
 @pytest.mark.asyncio
+async def test_handle_realtime_error_can_speak_tts_fallback(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    class MockTTSService:
+        configured = True
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        def missing_variables(self):
+            return []
+
+        async def synthesize_twilio_mulaw(self, text: str, *, session_id=None, call_id=None, voice=None, profile="normal"):
+            assert text == routes_twilio.REALTIME_FAILURE_TTS_TEXT
+            assert profile == TTSProfile.UNCLEAR
+            return TTSResult(
+                configured=True,
+                voice="th-TH-PremwadeeNeural",
+                profile=profile,
+                total_bytes=160,
+                estimated_duration_ms=20,
+            ).with_payloads(["fallback-audio"])
+
+    monkeypatch.setattr(routes_twilio, "AzureSpeechTTSService", MockTTSService)
+    websocket = FakeWebSocket()
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.ERROR,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        fallback_reason="provider_error",
+        warnings=["active response in progress"],
+    )
+
+    fallback = await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=Settings(azure_speech_key="key", azure_speech_region="eastus"),
+        event=event,
+        stream_sid="MZ123",
+        session_id="twilio_CA123",
+        call_id="CA123",
+    )
+
+    assert fallback is True
+    assert websocket.sent[0] == {"event": "media", "streamSid": "MZ123", "media": {"payload": "fallback-audio"}}
+    assert websocket.sent[1]["event"] == "mark"
+    assert websocket.sent[1]["streamSid"] == "MZ123"
+    assert websocket.sent[2]["type"] == "realtime.fallback"
+
+
+@pytest.mark.asyncio
 async def test_handle_realtime_transcript_creates_case(tmp_path) -> None:
     import app.api.routes_twilio as routes_twilio
 
@@ -690,6 +746,86 @@ async def test_realtime_structured_extraction_creates_case_and_sends_tool_result
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_realtime_tool_result_is_deduped_and_response_create_is_deferred(tmp_path) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    websocket = FakeWebSocket()
+    provider = FakeRealtimeToolProvider()
+    settings = Settings(
+        use_mock_services=True,
+        enable_realtime_voice=True,
+        realtime_provider="azure_openai_realtime",
+        azure_realtime_deployment="gpt-realtime",
+        case_store_path=str(tmp_path / "cases.json"),
+    )
+    debug_state = {}
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.STRUCTURED_EXTRACTION,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        metadata={
+            "provider_event_type": "response.function_call_arguments.done",
+            "tool_call_id": "call_structured",
+            "tool_arguments": {
+                "situation": "น้ำท่วม",
+                "incident_type": "flood",
+                "location": "หาดใหญ่",
+                "people_affected": 1,
+                "injuries": "หายใจลำบาก",
+                "immediate_needs": ["medical"],
+                "missing_fields": [],
+            },
+        },
+    )
+
+    await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=settings,
+        provider_client=provider,
+        event=event,
+        stream_sid="MZ123",
+        session_id="twilio_CA_REALTIME_DEDUPE",
+        call_id="CA_REALTIME_DEDUPE",
+        debug_state=debug_state,
+    )
+    duplicate = event.model_copy(
+        update={"metadata": {**event.metadata, "provider_event_type": "response.output_item.done"}}
+    )
+    await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=settings,
+        provider_client=provider,
+        event=duplicate,
+        stream_sid="MZ123",
+        session_id="twilio_CA_REALTIME_DEDUPE",
+        call_id="CA_REALTIME_DEDUPE",
+        debug_state=debug_state,
+    )
+
+    assert len(provider.tool_results) == 1
+    assert provider.created_responses == []
+    assert debug_state["pending_tool_response_create"] is True
+
+    await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=settings,
+        provider_client=provider,
+        event=RealtimeAudioEvent(
+            event_type=RealtimeAudioEventType.RESPONSE_COMPLETED,
+            provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+            metadata={"provider_event_type": "response.done", "response_status": "completed"},
+        ),
+        stream_sid="MZ123",
+        session_id="twilio_CA_REALTIME_DEDUPE",
+        call_id="CA_REALTIME_DEDUPE",
+        debug_state=debug_state,
+    )
+
+    assert provider.created_responses == [None]
+    assert "pending_tool_response_create" not in debug_state
 
 
 @pytest.mark.asyncio

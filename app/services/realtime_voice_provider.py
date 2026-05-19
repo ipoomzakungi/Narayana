@@ -122,7 +122,6 @@ class BaseRealtimeProvider:
             if tool_call_id:
                 item["call_id"] = tool_call_id
             await self._send_json({"type": "conversation.item.create", "item": item})
-            await self._send_response_create()
         except Exception as exc:
             sample = tracker.sample("tool_result_sent", metadata={"reason": "tool_result_failed"})
             return RealtimeSendResult(

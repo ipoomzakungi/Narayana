@@ -259,7 +259,7 @@ async def test_openai_provider_sends_safe_tool_result_response() -> None:
         "human_review_required": True,
         "case_id": "case_123",
     }
-    assert fake_socket.sent[2] == {"type": "response.create"}
+    assert len(fake_socket.sent) == 2
 
 
 @pytest.mark.asyncio

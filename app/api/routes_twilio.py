@@ -51,8 +51,9 @@ from app.services.twilio_audio_service import (
 
 router = APIRouter(tags=["telephony-twilio"])
 logger = logging.getLogger(__name__)
-REALTIME_TURN_WATCHDOG_SECONDS = 7.0
+REALTIME_TURN_WATCHDOG_SECONDS = 4.0
 REALTIME_GREETING_INSTRUCTIONS = "พูดเฉพาะประโยคนี้: สวัสดีค่ะ แจ้งเหตุและสถานที่ได้เลยค่ะ"
+REALTIME_FAILURE_TTS_TEXT = "ขออภัยค่ะ ระบบเสียงขัดข้อง กรุณาพูดอีกครั้งค่ะ"
 REALTIME_TRANSCRIPT_DELTA_EVENTS = {
     "transcript.caller.delta",
     "transcript.assistant.delta",
@@ -348,7 +349,10 @@ def _log_realtime(
             metadata=event_metadata,
             level=logging.WARNING,
         )
-    if event_type not in REALTIME_TRANSCRIPT_DELTA_EVENTS or settings.debug_realtime_deltas:
+    should_append_audit = should_emit_log
+    if event_type in REALTIME_TRANSCRIPT_DELTA_EVENTS:
+        should_append_audit = settings.debug_realtime_deltas
+    if should_append_audit:
         append_realtime_audit_event(
             get_intake_session_store(settings.assistant_max_followups),
             settings,
@@ -399,6 +403,34 @@ async def _send_realtime_fallback(
             warnings=warnings,
             fallback_reason=reason,
         ),
+    )
+
+
+async def _send_realtime_failure_tts(
+    websocket: WebSocket,
+    *,
+    settings,
+    stream_sid: str | None,
+    session_id: str,
+    call_id: str,
+    reason: str,
+) -> bool:
+    if not stream_sid:
+        return False
+    service = AzureSpeechTTSService(settings)
+    if not service.configured:
+        return False
+    mark_name = f"narayana_realtime_fallback_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}"
+    return await _send_tts_media(
+        websocket,
+        settings=settings,
+        stream_sid=stream_sid,
+        text=REALTIME_FAILURE_TTS_TEXT,
+        profile=TTSProfile.UNCLEAR,
+        call_id=call_id,
+        session_id=session_id,
+        purpose="realtime.fallback_tts",
+        mark_name=mark_name,
     )
 
 
@@ -1138,6 +1170,7 @@ async def _send_realtime_tool_result(
     event: RealtimeAudioEvent,
     session_id: str,
     call_id: str,
+    debug_state: dict | None = None,
 ) -> None:
     if provider_client is None or not hasattr(provider_client, "send_tool_result"):
         return
@@ -1158,6 +1191,63 @@ async def _send_realtime_tool_result(
         fallback_reason=send_result.fallback_reason,
         metadata={"tool_result": result, "tool_call_id": tool_call_id},
     )
+    if send_result.sent and debug_state is not None:
+        debug_state["pending_tool_response_create"] = True
+
+
+def _realtime_tool_call_id(event: RealtimeAudioEvent) -> str | None:
+    if not isinstance(event.metadata, dict):
+        return None
+    tool_call_id = event.metadata.get("tool_call_id")
+    if tool_call_id:
+        return str(tool_call_id)
+    return None
+
+
+def _should_process_realtime_tool_call(
+    *,
+    settings,
+    event: RealtimeAudioEvent,
+    session_id: str,
+    call_id: str,
+    provider: str,
+    debug_state: dict | None,
+) -> bool:
+    tool_call_id = _realtime_tool_call_id(event)
+    if debug_state is None or not tool_call_id:
+        return True
+    processed = debug_state.setdefault("processed_tool_call_ids", [])
+    if tool_call_id in processed:
+        _log_realtime(
+            settings=settings,
+            event_type="tool.duplicate_ignored",
+            session_id=session_id,
+            call_id=call_id,
+            provider=provider,
+            metadata={
+                "tool_call_id": tool_call_id,
+                "provider_event_type": event.metadata.get("provider_event_type"),
+            },
+        )
+        return False
+    processed.append(tool_call_id)
+    return True
+
+
+def _response_done_event(event: RealtimeAudioEvent) -> bool:
+    if event.event_type != RealtimeAudioEventType.RESPONSE_COMPLETED:
+        return False
+    provider_event_type = event.metadata.get("provider_event_type") if isinstance(event.metadata, dict) else None
+    return provider_event_type in {"response.done", "response.completed"}
+
+
+def _response_cancelled_by_turn(event: RealtimeAudioEvent) -> bool:
+    if not isinstance(event.metadata, dict):
+        return False
+    details = event.metadata.get("response_status_details")
+    if not isinstance(details, dict):
+        return False
+    return details.get("type") == "cancelled" and details.get("reason") == "turn_detected"
 
 
 def _intake_response_payload(response, *, transcript: str) -> dict:
@@ -1327,6 +1417,14 @@ async def _handle_realtime_event(
     _update_realtime_debug_state(debug_state, event)
     _ensure_realtime_state(settings=settings, session_id=session_id, call_id=call_id, provider=provider)
     if event.event_type == RealtimeAudioEventType.ERROR:
+        await _send_realtime_failure_tts(
+            websocket,
+            settings=settings,
+            stream_sid=stream_sid,
+            session_id=session_id,
+            call_id=call_id,
+            reason=event.fallback_reason or "provider_error",
+        )
         _log_realtime(
             settings=settings,
             event_type="error",
@@ -1416,7 +1514,14 @@ async def _handle_realtime_event(
             )
     if event.event_type == RealtimeAudioEventType.STRUCTURED_EXTRACTION:
         arguments = event.metadata.get("tool_arguments") if isinstance(event.metadata, dict) else {}
-        if isinstance(arguments, dict):
+        if isinstance(arguments, dict) and _should_process_realtime_tool_call(
+            settings=settings,
+            event=event,
+            session_id=session_id,
+            call_id=call_id,
+            provider=provider,
+            debug_state=debug_state,
+        ):
             _merge_realtime_extraction_into_state(settings=settings, session_id=session_id, arguments=arguments)
             payload, _ = await _persist_realtime_case_from_state(
                 settings=settings,
@@ -1432,6 +1537,7 @@ async def _handle_realtime_event(
                 event=event,
                 session_id=session_id,
                 call_id=call_id,
+                debug_state=debug_state,
             )
     if event.event_type == RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED and event.audio_base64:
         if not stream_sid:
@@ -1453,6 +1559,25 @@ async def _handle_realtime_event(
     ):
         mark_name = f"narayana_realtime_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}"
         await websocket.send_json(build_twilio_mark_event(stream_sid, mark_name))
+    if debug_state is not None and debug_state.get("pending_tool_response_create") and _response_done_event(event):
+        debug_state.pop("pending_tool_response_create", None)
+        if _response_cancelled_by_turn(event):
+            _log_realtime(
+                settings=settings,
+                event_type="tool.response_create.skipped",
+                session_id=session_id,
+                call_id=call_id,
+                provider=provider,
+                metadata={"reason": "turn_detected"},
+            )
+        elif provider_client is not None:
+            await _send_realtime_response_create(
+                settings=settings,
+                provider=provider_client,
+                session_id=session_id,
+                call_id=call_id,
+                reason="tool_result",
+            )
     return False
 
 
