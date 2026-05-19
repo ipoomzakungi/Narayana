@@ -255,6 +255,21 @@ async def test_openai_provider_sends_safe_tool_result_response() -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_provider_can_commit_audio_and_create_response() -> None:
+    fake_socket = FakeProviderSocket()
+    provider = AzureOpenAIRealtimeProvider(realtime_settings(), websocket_factory=lambda *args, **kwargs: fake_socket)
+
+    await provider.connect(session_id="twilio_CA123", call_id="CA123", instructions="crisis only")
+    commit = await provider.commit_audio_buffer()
+    response = await provider.create_response(instructions="ทักทายสั้น ๆ")
+
+    assert commit.sent is True
+    assert response.sent is True
+    assert fake_socket.sent[1] == {"type": "input_audio_buffer.commit"}
+    assert fake_socket.sent[2] == {"type": "response.create", "response": {"instructions": "ทักทายสั้น ๆ"}}
+
+
+@pytest.mark.asyncio
 async def test_openai_provider_normalizes_transcript_and_tool_events() -> None:
     fake_socket = FakeProviderSocket(
         [

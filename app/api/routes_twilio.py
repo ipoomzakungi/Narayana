@@ -51,6 +51,11 @@ from app.services.twilio_audio_service import (
 
 router = APIRouter(tags=["telephony-twilio"])
 logger = logging.getLogger(__name__)
+REALTIME_TURN_WATCHDOG_SECONDS = 7.0
+REALTIME_GREETING_INSTRUCTIONS = (
+    "ทักทายผู้โทรสั้น ๆ เป็นภาษาไทยว่า: "
+    "สวัสดีค่ะ นี่คือระบบช่วยรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ"
+)
 
 
 def _twilio_stream_url(public_base_url: str, call_id: str) -> str:
@@ -524,8 +529,19 @@ def _update_realtime_debug_state(debug_state: dict | None, event: RealtimeAudioE
     provider_event_type = event.metadata.get("provider_event_type") if isinstance(event.metadata, dict) else None
     debug_state["last_event_type"] = event.event_type.value
     debug_state["last_provider_event_type"] = provider_event_type
+    if provider_event_type == "input_audio_buffer.speech_started":
+        debug_state["speech_started_at_monotonic"] = asyncio.get_running_loop().time()
+        debug_state["speech_stopped"] = False
+        debug_state["turn_response_started"] = False
+        debug_state["watchdog_forced_commit"] = False
+    if provider_event_type in {"input_audio_buffer.speech_stopped", "input_audio_buffer.committed"}:
+        debug_state["speech_stopped"] = True
+        debug_state.pop("speech_started_at_monotonic", None)
     if event.event_type == RealtimeAudioEventType.RESPONSE_STARTED:
         debug_state["response_started"] = True
+        if debug_state.get("speech_started_at_monotonic") is not None:
+            debug_state["turn_response_started"] = True
+            debug_state.pop("speech_started_at_monotonic", None)
     if event.event_type == RealtimeAudioEventType.OUTPUT_AUDIO_RECEIVED:
         debug_state["output_audio_received"] = True
     if event.event_type == RealtimeAudioEventType.RESPONSE_COMPLETED:
@@ -533,6 +549,115 @@ def _update_realtime_debug_state(debug_state: dict | None, event: RealtimeAudioE
         for key in ("response_id", "response_status", "response_status_details"):
             if key in event.metadata:
                 debug_state[key] = event.metadata[key]
+
+
+async def _send_realtime_response_create(
+    *,
+    settings,
+    provider: RealtimeVoiceProvider,
+    session_id: str,
+    call_id: str,
+    reason: str,
+    instructions: str | None = None,
+) -> RealtimeSendResult | None:
+    create_response = getattr(provider, "create_response", None)
+    if not callable(create_response):
+        _log_realtime(
+            settings=settings,
+            event_type="response.create.unavailable",
+            session_id=session_id,
+            call_id=call_id,
+            provider=provider.mode.value,
+            warnings=["Realtime provider does not support response.create."],
+            metadata={"reason": reason},
+        )
+        return None
+    result = await create_response(instructions=instructions)
+    _log_realtime(
+        settings=settings,
+        event_type="response.create.sent" if result.sent else "response.create.failed",
+        session_id=session_id,
+        call_id=call_id,
+        provider=result.provider.value,
+        latency_ms=result.latency_ms,
+        warnings=result.warnings,
+        fallback_reason=result.fallback_reason,
+        metadata={"reason": reason},
+    )
+    return result
+
+
+async def _send_realtime_greeting(
+    *,
+    settings,
+    provider: RealtimeVoiceProvider,
+    session_id: str,
+    call_id: str,
+    debug_state: dict,
+) -> None:
+    if debug_state.get("greeting_requested"):
+        return
+    debug_state["greeting_requested"] = True
+    await _send_realtime_response_create(
+        settings=settings,
+        provider=provider,
+        session_id=session_id,
+        call_id=call_id,
+        reason="initial_greeting",
+        instructions=REALTIME_GREETING_INSTRUCTIONS,
+    )
+
+
+async def _maybe_force_realtime_turn_commit(
+    *,
+    settings,
+    provider: RealtimeVoiceProvider,
+    session_id: str,
+    call_id: str,
+    debug_state: dict,
+) -> None:
+    speech_started_at = debug_state.get("speech_started_at_monotonic")
+    if not isinstance(speech_started_at, (int, float)):
+        return
+    if debug_state.get("watchdog_forced_commit") or debug_state.get("turn_response_started"):
+        return
+    elapsed_seconds = asyncio.get_running_loop().time() - speech_started_at
+    if elapsed_seconds < REALTIME_TURN_WATCHDOG_SECONDS:
+        return
+
+    debug_state["watchdog_forced_commit"] = True
+    commit_audio_buffer = getattr(provider, "commit_audio_buffer", None)
+    if callable(commit_audio_buffer):
+        commit_result = await commit_audio_buffer()
+        _log_realtime(
+            settings=settings,
+            event_type="watchdog.force_commit" if commit_result.sent else "watchdog.force_commit.failed",
+            session_id=session_id,
+            call_id=call_id,
+            provider=commit_result.provider.value,
+            latency_ms=commit_result.latency_ms,
+            warnings=commit_result.warnings,
+            fallback_reason=commit_result.fallback_reason,
+            metadata={"elapsed_seconds": round(elapsed_seconds, 3)},
+        )
+    else:
+        _log_realtime(
+            settings=settings,
+            event_type="watchdog.force_commit.unavailable",
+            session_id=session_id,
+            call_id=call_id,
+            provider=provider.mode.value,
+            warnings=["Realtime provider does not support input_audio_buffer.commit."],
+            metadata={"elapsed_seconds": round(elapsed_seconds, 3)},
+        )
+
+    await _send_realtime_response_create(
+        settings=settings,
+        provider=provider,
+        session_id=session_id,
+        call_id=call_id,
+        reason="watchdog_force_commit",
+    )
 
 
 def _realtime_model_or_deployment(settings, provider: str) -> str:
@@ -1788,6 +1913,13 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                                 warnings=connection.warnings,
                             ),
                         )
+                        await _send_realtime_greeting(
+                            settings=settings,
+                            provider=realtime_provider,
+                            session_id=session_id,
+                            call_id=call_id,
+                            debug_state=realtime_debug_state,
+                        )
                     else:
                         await _send_realtime_fallback(
                             websocket,
@@ -1943,6 +2075,14 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                             call_id=call_id,
                             debug_state=realtime_debug_state,
                         )
+                        if not fallback_to_current:
+                            await _maybe_force_realtime_turn_commit(
+                                settings=settings,
+                                provider=realtime_provider,
+                                session_id=session_id,
+                                call_id=call_id,
+                                debug_state=realtime_debug_state,
+                            )
                         if not fallback_to_current:
                             continue
                     else:

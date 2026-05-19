@@ -807,3 +807,46 @@ def test_realtime_logging_redacts_raw_audio_and_secrets(caplog) -> None:
     assert "secret" not in caplog.text
     assert "[AUDIO_REDACTED]" in caplog.text
     assert "[REDACTED]" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_realtime_watchdog_commits_and_creates_response(caplog) -> None:
+    import app.api.routes_twilio as routes_twilio
+    from app.models.realtime import RealtimeSendResult
+
+    class FakeProvider:
+        mode = RealtimeProviderMode.AZURE_OPENAI_REALTIME
+
+        def __init__(self) -> None:
+            self.committed = False
+            self.created = False
+
+        async def commit_audio_buffer(self):
+            self.committed = True
+            return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=1)
+
+        async def create_response(self, *, instructions=None):
+            self.created = True
+            return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=1)
+
+    provider = FakeProvider()
+    debug_state = {
+        "speech_started_at_monotonic": 0,
+        "turn_response_started": False,
+        "watchdog_forced_commit": False,
+    }
+
+    with caplog.at_level("INFO", logger="app.api.routes_twilio"):
+        await routes_twilio._maybe_force_realtime_turn_commit(
+            settings=Settings(call_audit_enabled=True),
+            provider=provider,
+            session_id="twilio_CA_WATCHDOG",
+            call_id="CA_WATCHDOG",
+            debug_state=debug_state,
+        )
+
+    assert provider.committed is True
+    assert provider.created is True
+    assert debug_state["watchdog_forced_commit"] is True
+    assert "realtime.watchdog.force_commit" in caplog.text
+    assert "realtime.response.create.sent" in caplog.text

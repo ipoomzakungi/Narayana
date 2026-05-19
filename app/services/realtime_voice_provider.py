@@ -35,6 +35,12 @@ class RealtimeVoiceProvider(Protocol):
     async def send_tool_result(self, *, tool_call_id: str | None, result: dict[str, Any]) -> RealtimeSendResult:
         ...
 
+    async def commit_audio_buffer(self) -> RealtimeSendResult:
+        ...
+
+    async def create_response(self, *, instructions: str | None = None) -> RealtimeSendResult:
+        ...
+
     async def receive_audio_event(self) -> RealtimeAudioEvent | None:
         ...
 
@@ -116,7 +122,7 @@ class BaseRealtimeProvider:
             if tool_call_id:
                 item["call_id"] = tool_call_id
             await self._send_json({"type": "conversation.item.create", "item": item})
-            await self._send_json({"type": "response.create"})
+            await self._send_response_create()
         except Exception as exc:
             sample = tracker.sample("tool_result_sent", metadata={"reason": "tool_result_failed"})
             return RealtimeSendResult(
@@ -128,6 +134,46 @@ class BaseRealtimeProvider:
             )
         sample = tracker.sample("tool_result_sent", metadata={"tool_call_id": tool_call_id})
         return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=sample.latency_ms or 0)
+
+    async def commit_audio_buffer(self) -> RealtimeSendResult:
+        tracker = self._tracker(self.session_id or "", self.call_id)
+        tracker.start("audio_buffer_commit_sent")
+        try:
+            await self._send_json({"type": "input_audio_buffer.commit"})
+        except Exception as exc:
+            sample = tracker.sample("audio_buffer_commit_sent", metadata={"reason": "commit_failed"})
+            return RealtimeSendResult(
+                sent=False,
+                provider=self.mode,
+                fallback_reason="commit_failed",
+                warnings=[f"Realtime audio buffer commit failed: {exc}"],
+                latency_ms=sample.latency_ms or 0,
+            )
+        sample = tracker.sample("audio_buffer_commit_sent")
+        return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=sample.latency_ms or 0)
+
+    async def create_response(self, *, instructions: str | None = None) -> RealtimeSendResult:
+        tracker = self._tracker(self.session_id or "", self.call_id)
+        tracker.start("response_create_sent")
+        try:
+            await self._send_response_create(instructions=instructions)
+        except Exception as exc:
+            sample = tracker.sample("response_create_sent", metadata={"reason": "response_create_failed"})
+            return RealtimeSendResult(
+                sent=False,
+                provider=self.mode,
+                fallback_reason="response_create_failed",
+                warnings=[f"Realtime response create failed: {exc}"],
+                latency_ms=sample.latency_ms or 0,
+            )
+        sample = tracker.sample("response_create_sent")
+        return RealtimeSendResult(sent=True, provider=self.mode, latency_ms=sample.latency_ms or 0)
+
+    async def _send_response_create(self, *, instructions: str | None = None) -> None:
+        payload: dict[str, Any] = {"type": "response.create"}
+        if instructions:
+            payload["response"] = {"instructions": instructions}
+        await self._send_json(payload)
 
     async def _recv_json(self) -> dict[str, Any]:
         if self.websocket is None:
