@@ -124,6 +124,8 @@ def test_realtime_instructions_include_crisis_safety_rules() -> None:
     instructions = build_realtime_instructions(Settings())
 
     assert "crisis intake" in instructions
+    assert "Spoken replies should be under 12 Thai words" in instructions
+    assert "ระบบนี้รับแจ้งเหตุฉุกเฉินค่ะ" in instructions
     assert "Never say rescue has been dispatched" in instructions
     assert "Never say an ambulance is on the way" in instructions
     assert "Never reveal RED, YELLOW, or GREEN" in instructions
@@ -143,6 +145,9 @@ def test_openai_realtime_session_update_uses_twilio_compatible_audio_and_tool() 
     assert session["tools"][0]["name"] == "crisis_intake_update"
     assert "caller_tone" in session["tools"][0]["parameters"]["properties"]
     assert session["tool_choice"] == "auto"
+    assert session["turn_detection"]["threshold"] == 0.55
+    assert session["turn_detection"]["prefix_padding_ms"] == 200
+    assert session["turn_detection"]["silence_duration_ms"] == 300
     assert session["turn_detection"]["create_response"] is True
     assert session["turn_detection"]["interrupt_response"] is True
     assert "input_audio_transcription" not in session
@@ -199,6 +204,9 @@ def test_openai_realtime_v1_session_update_uses_nested_audio_schema() -> None:
     assert session["output_modalities"] == ["audio"]
     assert session["audio"]["input"]["format"] == {"type": "audio/pcmu"}
     assert session["audio"]["input"]["transcription"] == {"model": "whisper-1"}
+    assert session["audio"]["input"]["turn_detection"]["threshold"] == 0.55
+    assert session["audio"]["input"]["turn_detection"]["prefix_padding_ms"] == 200
+    assert session["audio"]["input"]["turn_detection"]["silence_duration_ms"] == 300
     assert session["audio"]["input"]["turn_detection"]["create_response"] is True
     assert session["audio"]["input"]["turn_detection"]["interrupt_response"] is True
     assert session["audio"]["output"]["format"] == {"type": "audio/pcmu"}

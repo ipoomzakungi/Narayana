@@ -67,6 +67,10 @@ def test_telephony_defaults_keep_local_mic_and_no_provider() -> None:
     assert settings.realtime_input_audio_passthrough_enabled is False
     assert settings.realtime_output_voice == "marin"
     assert settings.normalized_realtime_output_voice == "marin"
+    assert settings.realtime_vad_threshold == 0.55
+    assert settings.realtime_vad_prefix_padding_ms == 200
+    assert settings.realtime_vad_silence_duration_ms == 300
+    assert settings.debug_realtime_deltas is False
     assert settings.realtime_configured is False
     assert settings.azure_openai_realtime_configured is False
     assert settings.azure_voice_live_realtime_configured is False
@@ -143,6 +147,10 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     monkeypatch.setenv("REALTIME_INPUT_AUDIO_FORMAT", "g711_ulaw")
     monkeypatch.setenv("REALTIME_TWILIO_AUDIO_PASSTHROUGH", "true")
     monkeypatch.setenv("REALTIME_OUTPUT_VOICE", "coral")
+    monkeypatch.setenv("REALTIME_VAD_THRESHOLD", "0.6")
+    monkeypatch.setenv("REALTIME_VAD_PREFIX_PADDING_MS", "180")
+    monkeypatch.setenv("REALTIME_VAD_SILENCE_DURATION_MS", "250")
+    monkeypatch.setenv("DEBUG_REALTIME_DELTAS", "true")
     reset_settings_cache()
 
     settings = Settings.from_env()
@@ -190,6 +198,10 @@ def test_tts_settings_parse_from_env_without_requiring_azure(monkeypatch) -> Non
     assert settings.effective_realtime_input_audio_format == "g711_ulaw"
     assert settings.realtime_input_audio_passthrough_enabled is True
     assert settings.normalized_realtime_output_voice == "coral"
+    assert settings.realtime_vad_threshold == 0.6
+    assert settings.realtime_vad_prefix_padding_ms == 180
+    assert settings.realtime_vad_silence_duration_ms == 250
+    assert settings.debug_realtime_deltas is True
     assert settings.azure_speech_tts_configured is False
     assert settings.missing_azure_speech_tts_variables() == ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"]
     reset_settings_cache()

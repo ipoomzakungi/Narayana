@@ -508,6 +508,77 @@ async def test_realtime_transcript_completed_can_emit_intake_followup(tmp_path) 
 
 
 @pytest.mark.asyncio
+async def test_realtime_transcript_delta_is_not_persisted_without_debug() -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    websocket = FakeWebSocket()
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_DELTA,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        text="สวัสดี",
+        metadata={"provider_event_type": "response.output_audio_transcript.delta"},
+    )
+    settings = Settings(
+        enable_realtime_voice=True,
+        realtime_provider="azure_openai_realtime",
+        twilio_debug_payloads_enabled=False,
+        debug_realtime_deltas=False,
+    )
+
+    fallback = await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=settings,
+        event=event,
+        stream_sid="MZ123",
+        session_id="twilio_CA_REALTIME_DELTA",
+        call_id="CA_REALTIME_DELTA",
+    )
+
+    assert fallback is False
+    state = get_intake_session_store().snapshot("twilio_CA_REALTIME_DELTA")
+    assert state is not None
+    assert state.realtime_transcript_turns == []
+    assert [item.type for item in state.timeline_events] == []
+
+
+@pytest.mark.asyncio
+async def test_realtime_transcript_delta_can_be_persisted_in_debug() -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    get_intake_session_store().clear()
+    websocket = FakeWebSocket()
+    event = RealtimeAudioEvent(
+        event_type=RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_DELTA,
+        provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
+        text="สวัสดี",
+        metadata={"provider_event_type": "response.output_audio_transcript.delta"},
+    )
+    settings = Settings(
+        enable_realtime_voice=True,
+        realtime_provider="azure_openai_realtime",
+        twilio_debug_payloads_enabled=False,
+        debug_realtime_deltas=True,
+    )
+
+    fallback = await routes_twilio._handle_realtime_event(
+        websocket,
+        settings=settings,
+        event=event,
+        stream_sid="MZ123",
+        session_id="twilio_CA_REALTIME_DELTA_DEBUG",
+        call_id="CA_REALTIME_DELTA_DEBUG",
+    )
+
+    assert fallback is False
+    state = get_intake_session_store().snapshot("twilio_CA_REALTIME_DELTA_DEBUG")
+    assert state is not None
+    assert state.realtime_transcript_turns[0]["text"] == "สวัสดี"
+    assert state.realtime_transcript_turns[0]["is_delta"] is True
+    assert state.timeline_events[0].type == "realtime.transcript.assistant.delta"
+
+
+@pytest.mark.asyncio
 async def test_realtime_structured_extraction_creates_case_and_sends_tool_result(tmp_path) -> None:
     import app.api.routes_twilio as routes_twilio
 

@@ -236,8 +236,12 @@ def build_realtime_instructions(settings: Settings) -> str:
     prompt = build_intake_system_prompt(settings)
     return (
         f"{prompt}\n"
-        "Realtime voice mode: Thai first. Speak calmly, slowly, concisely, and empathetically. "
+        "Realtime voice mode: Thai first. Speak calmly, clearly, concisely, and empathetically. "
         "Ask exactly one crisis-intake question at a time. Do not chit-chat or answer off-topic questions. "
+        "Spoken replies should be under 12 Thai words when possible. "
+        "Do not repeat long policy text. If the caller is confused, asks what this system is, or is off-topic, say only: "
+        "ระบบนี้รับแจ้งเหตุฉุกเฉินค่ะ หากมีเหตุ บอกสถานการณ์และสถานที่ได้เลยค่ะ "
+        "Then ask only the single most important missing intake question. "
         "Never say rescue has been dispatched. Never say an ambulance is on the way. "
         "Never reveal RED, YELLOW, or GREEN triage labels to the caller. Do not diagnose. "
         "Escalate human review immediately for breathing difficulty, unconsciousness, severe bleeding, "
@@ -317,9 +321,9 @@ def build_openai_realtime_session_update(
         "output_audio_format": "g711_ulaw",
         "turn_detection": {
             "type": "server_vad",
-            "threshold": 0.5,
-            "prefix_padding_ms": 300,
-            "silence_duration_ms": 500,
+            "threshold": settings.realtime_vad_threshold,
+            "prefix_padding_ms": settings.realtime_vad_prefix_padding_ms,
+            "silence_duration_ms": settings.realtime_vad_silence_duration_ms,
             "create_response": True,
             "interrupt_response": True,
         },
@@ -349,9 +353,9 @@ def _build_openai_realtime_v1_session(
         "format": input_format,
         "turn_detection": {
             "type": "server_vad",
-            "threshold": 0.5,
-            "prefix_padding_ms": 300,
-            "silence_duration_ms": 500,
+            "threshold": settings.realtime_vad_threshold,
+            "prefix_padding_ms": settings.realtime_vad_prefix_padding_ms,
+            "silence_duration_ms": settings.realtime_vad_silence_duration_ms,
             "create_response": True,
             "interrupt_response": True,
         },

@@ -68,6 +68,10 @@ class Settings:
     realtime_twilio_audio_passthrough: bool = False
     realtime_input_transcription_enabled: bool = False
     realtime_output_voice: str = "marin"
+    realtime_vad_threshold: float = 0.55
+    realtime_vad_prefix_padding_ms: int = 200
+    realtime_vad_silence_duration_ms: int = 300
+    debug_realtime_deltas: bool = False
     azure_voice_live_endpoint: str = ""
     azure_voice_live_model: str = ""
     cosmos_db_endpoint: str = ""
@@ -163,6 +167,10 @@ class Settings:
                 default=False,
             ),
             realtime_output_voice=os.getenv("REALTIME_OUTPUT_VOICE", "marin"),
+            realtime_vad_threshold=float(os.getenv("REALTIME_VAD_THRESHOLD", "0.55")),
+            realtime_vad_prefix_padding_ms=int(os.getenv("REALTIME_VAD_PREFIX_PADDING_MS", "200")),
+            realtime_vad_silence_duration_ms=int(os.getenv("REALTIME_VAD_SILENCE_DURATION_MS", "300")),
+            debug_realtime_deltas=_truthy(os.getenv("DEBUG_REALTIME_DELTAS"), default=False),
             azure_voice_live_endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT", ""),
             azure_voice_live_model=os.getenv("AZURE_VOICE_LIVE_MODEL", ""),
             cosmos_db_endpoint=os.getenv("COSMOS_DB_ENDPOINT", ""),

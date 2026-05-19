@@ -52,10 +52,11 @@ from app.services.twilio_audio_service import (
 router = APIRouter(tags=["telephony-twilio"])
 logger = logging.getLogger(__name__)
 REALTIME_TURN_WATCHDOG_SECONDS = 7.0
-REALTIME_GREETING_INSTRUCTIONS = (
-    "ทักทายผู้โทรสั้น ๆ เป็นภาษาไทยว่า: "
-    "สวัสดีค่ะ นี่คือระบบช่วยรับแจ้งเหตุ กรุณาเล่าสถานการณ์และสถานที่สั้น ๆ ได้เลยค่ะ"
-)
+REALTIME_GREETING_INSTRUCTIONS = "พูดเฉพาะประโยคนี้: สวัสดีค่ะ แจ้งเหตุและสถานที่ได้เลยค่ะ"
+REALTIME_TRANSCRIPT_DELTA_EVENTS = {
+    "transcript.caller.delta",
+    "transcript.assistant.delta",
+}
 
 
 def _twilio_stream_url(public_base_url: str, call_id: str) -> str:
@@ -336,6 +337,8 @@ def _log_realtime(
     if event_type == "audio.input.sent":
         sequence = event_metadata.get("sequence")
         should_emit_log = isinstance(sequence, int) and _should_log_realtime_audio_frame(sequence)
+    elif event_type in REALTIME_TRANSCRIPT_DELTA_EVENTS:
+        should_emit_log = settings.debug_realtime_deltas
     if should_emit_log:
         log_call_event(
             logger,
@@ -345,20 +348,21 @@ def _log_realtime(
             metadata=event_metadata,
             level=logging.WARNING,
         )
-    append_realtime_audit_event(
-        get_intake_session_store(settings.assistant_max_followups),
-        settings,
-        session_id,
-        event_type=event_name,
-        provider=provider,
-        call_id=call_id,
-        speaker=speaker,
-        text=text,
-        latency_ms=latency_ms,
-        warnings=warnings,
-        fallback_reason=fallback_reason,
-        metadata=metadata,
-    )
+    if event_type not in REALTIME_TRANSCRIPT_DELTA_EVENTS or settings.debug_realtime_deltas:
+        append_realtime_audit_event(
+            get_intake_session_store(settings.assistant_max_followups),
+            settings,
+            session_id,
+            event_type=event_name,
+            provider=provider,
+            call_id=call_id,
+            speaker=speaker,
+            text=text,
+            latency_ms=latency_ms,
+            warnings=warnings,
+            fallback_reason=fallback_reason,
+            metadata=metadata,
+        )
 
 
 async def _send_realtime_fallback(
@@ -1310,16 +1314,17 @@ async def _handle_realtime_event(
             RealtimeAudioEventType.CALLER_TRANSCRIPT_DELTA,
             RealtimeAudioEventType.ASSISTANT_TRANSCRIPT_DELTA,
         }
-        _append_realtime_transcript_turn(
-            settings=settings,
-            session_id=session_id,
-            call_id=call_id,
-            provider=provider,
-            speaker=speaker,
-            text=event.text,
-            is_delta=is_delta,
-            metadata=event.metadata,
-        )
+        if not is_delta or settings.debug_realtime_deltas:
+            _append_realtime_transcript_turn(
+                settings=settings,
+                session_id=session_id,
+                call_id=call_id,
+                provider=provider,
+                speaker=speaker,
+                text=event.text,
+                is_delta=is_delta,
+                metadata=event.metadata,
+            )
         if event.event_type == RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED:
             await _process_realtime_intake_text(
                 websocket=websocket,
