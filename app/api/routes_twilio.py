@@ -307,8 +307,8 @@ def _realtime_event_payload(
     }
 
 
-async def _send_twilio_debug_payload(websocket: WebSocket, settings, payload: dict) -> None:
-    if settings.twilio_debug_payloads_enabled:
+async def _send_twilio_debug_payload(websocket: WebSocket | None, settings, payload: dict) -> None:
+    if websocket is not None and settings.twilio_debug_payloads_enabled:
         await websocket.send_json(payload)
 
 
@@ -666,6 +666,10 @@ def _update_realtime_debug_state(debug_state: dict | None, event: RealtimeAudioE
                 debug_state[key] = event.metadata[key]
 
 
+def _realtime_debug_log_metadata(debug_state: dict) -> dict:
+    return {key: value for key, value in debug_state.items() if key != "background_intake_tasks"}
+
+
 async def _send_realtime_response_create(
     *,
     settings,
@@ -918,7 +922,7 @@ def _transcript_from_realtime_extraction(arguments: dict) -> str:
 
 async def _process_realtime_intake_text(
     *,
-    websocket: WebSocket,
+    websocket: WebSocket | None,
     settings,
     session_id: str,
     call_id: str,
@@ -927,6 +931,7 @@ async def _process_realtime_intake_text(
     lifecycle_service: CallLifecycleService | None = None,
     lifecycle_state: CallLifecycleState | None = None,
     send_tts: bool = False,
+    send_debug: bool = True,
 ) -> None:
     clean = text.strip()
     if not clean:
@@ -944,11 +949,12 @@ async def _process_realtime_intake_text(
         )
     )
     payload = _intake_response_payload(response, transcript=clean)
-    await _send_twilio_debug_payload(websocket, settings, payload)
+    if send_debug:
+        await _send_twilio_debug_payload(websocket, settings, payload)
     if response.action != IntakeAction.ASK_FOLLOWUP and response.created_case is not None:
         store = get_intake_session_store(settings.assistant_max_followups)
         store.mark_final(session_id, response.created_case.case.case_id, response.partial_state.status)
-    if send_tts:
+    if send_tts and websocket is not None:
         await _maybe_send_tts_response(
             websocket,
             payload=payload,
@@ -959,6 +965,54 @@ async def _process_realtime_intake_text(
             lifecycle_service=lifecycle_service,
             lifecycle_state=lifecycle_state,
         )
+
+
+def _schedule_realtime_intake_processing(
+    *,
+    settings,
+    session_id: str,
+    call_id: str,
+    text: str,
+    debug_state: dict | None,
+) -> None:
+    task = asyncio.create_task(
+        _process_realtime_intake_text(
+            websocket=None,
+            settings=settings,
+            session_id=session_id,
+            call_id=call_id,
+            text=text,
+            stream_sid=None,
+            send_tts=False,
+            send_debug=False,
+        )
+    )
+    if debug_state is not None:
+        debug_state.setdefault("background_intake_tasks", []).append(task)
+
+    def _log_background_result(done_task: asyncio.Task) -> None:
+        try:
+            done_task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            log_call_event(
+                logger,
+                "realtime.background_intake.failed",
+                session_id=session_id,
+                call_id=call_id,
+                metadata={"reason": str(exc)},
+                level=logging.WARNING,
+            )
+
+    task.add_done_callback(_log_background_result)
+    log_call_event(
+        logger,
+        "realtime.background_intake.queued",
+        session_id=session_id,
+        call_id=call_id,
+        metadata={"text_length": len(text)},
+    )
 
 
 def _full_realtime_transcript(realtime_transcript_turns: list[dict]) -> str:
@@ -1503,14 +1557,12 @@ async def _handle_realtime_event(
                 metadata=event.metadata,
             )
         if event.event_type == RealtimeAudioEventType.CALLER_TRANSCRIPT_COMPLETED:
-            await _process_realtime_intake_text(
-                websocket=websocket,
+            _schedule_realtime_intake_processing(
                 settings=settings,
                 session_id=session_id,
                 call_id=call_id,
                 text=event.text,
-                stream_sid=stream_sid,
-                send_tts=False,
+                debug_state=debug_state,
             )
     if event.event_type == RealtimeAudioEventType.STRUCTURED_EXTRACTION:
         arguments = event.metadata.get("tool_arguments") if isinstance(event.metadata, dict) else {}
@@ -2403,7 +2455,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         "streamSid_present": bool(stream_sid),
                         "realtime_active": realtime_active,
                         "realtime_queue_size": realtime_event_queue.qsize(),
-                        **realtime_debug_state,
+                        **_realtime_debug_log_metadata(realtime_debug_state),
                     },
                 )
                 if realtime_selection.enabled:
@@ -2440,7 +2492,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                 "streamSid_present": bool(stream_sid),
                 "realtime_active": realtime_active,
                 "realtime_queue_size": realtime_event_queue.qsize(),
-                **realtime_debug_state,
+                **_realtime_debug_log_metadata(realtime_debug_state),
             },
             level=logging.WARNING,
         )

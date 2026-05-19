@@ -130,9 +130,10 @@ def test_realtime_instructions_include_crisis_safety_rules() -> None:
     assert "Never say an ambulance is on the way" in instructions
     assert "Never reveal RED, YELLOW, or GREEN" in instructions
     assert "Do not diagnose" in instructions
+    assert "Do not call tools during the live voice conversation" in instructions
 
 
-def test_openai_realtime_session_update_uses_twilio_compatible_audio_and_tool() -> None:
+def test_openai_realtime_session_update_uses_twilio_compatible_audio_without_tools() -> None:
     payload = build_openai_realtime_session_update(realtime_settings(), "crisis only")
 
     session = payload["session"]
@@ -142,9 +143,8 @@ def test_openai_realtime_session_update_uses_twilio_compatible_audio_and_tool() 
     assert "modalities" not in session
     assert session["input_audio_format"] == "pcm16"
     assert session["output_audio_format"] == "g711_ulaw"
-    assert session["tools"][0]["name"] == "crisis_intake_update"
-    assert "caller_tone" in session["tools"][0]["parameters"]["properties"]
-    assert session["tool_choice"] == "auto"
+    assert "tools" not in session
+    assert "tool_choice" not in session
     assert session["turn_detection"]["threshold"] == 0.55
     assert session["turn_detection"]["prefix_padding_ms"] == 200
     assert session["turn_detection"]["silence_duration_ms"] == 300
@@ -211,8 +211,8 @@ def test_openai_realtime_v1_session_update_uses_nested_audio_schema() -> None:
     assert session["audio"]["input"]["turn_detection"]["interrupt_response"] is True
     assert session["audio"]["output"]["format"] == {"type": "audio/pcmu"}
     assert session["audio"]["output"]["voice"] == "coral"
-    assert session["tools"][0]["name"] == "crisis_intake_update"
-    assert session["tool_choice"] == "auto"
+    assert "tools" not in session
+    assert "tool_choice" not in session
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -502,6 +504,7 @@ async def test_handle_realtime_transcript_creates_case(tmp_path) -> None:
         provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
         text="ไฟไหม้ที่หาดใหญ่ มีควันไฟ มีคนบาดเจ็บ 2 คน",
     )
+    debug_state = {}
 
     fallback = await routes_twilio._handle_realtime_event(
         websocket,
@@ -516,17 +519,21 @@ async def test_handle_realtime_transcript_creates_case(tmp_path) -> None:
         stream_sid="MZ123",
         session_id="twilio_CA_REALTIME_CASE",
         call_id="CA_REALTIME_CASE",
+        debug_state=debug_state,
     )
+    await asyncio.gather(*debug_state["background_intake_tasks"])
 
     assert fallback is False
     assert websocket.sent[0]["type"] == "realtime.transcript.caller.completed"
-    case_payload = next(message for message in websocket.sent if message.get("type") == "triage.case.created")
-    assert case_payload["record"]["source_provider"] == "azure_openai_realtime"
-    assert case_payload["record"]["case"]["realtime_provider"] == "azure_openai_realtime"
-    assert case_payload["record"]["case"]["realtime_model_or_deployment"] == "gpt-realtime"
-    assert case_payload["record"]["case"]["caller_tone"] in {"unknown", "urgent", "distressed"}
-    assert case_payload["record"]["case"]["recommended_operator_action"] == "immediate_human_review"
-    assert case_payload["record"]["case"]["realtime_transcript_turns"][0]["text"] == event.text
+    assert not any(message.get("type") == "triage.case.created" for message in websocket.sent)
+    state = get_intake_session_store().snapshot("twilio_CA_REALTIME_CASE")
+    assert state is not None
+    assert state.final_case_id
+    assert state.realtime_provider == "azure_openai_realtime"
+    assert state.realtime_model_or_deployment == "gpt-realtime"
+    assert state.caller_tone in {"unknown", "urgent", "distressed"}
+    assert state.human_review_required is True
+    assert state.realtime_transcript_turns[0]["text"] == event.text
 
 
 @pytest.mark.asyncio
@@ -540,6 +547,7 @@ async def test_realtime_transcript_completed_can_emit_intake_followup(tmp_path) 
         provider=RealtimeProviderMode.AZURE_OPENAI_REALTIME,
         text="น้ำท่วมอยู่ที่หาดใหญ่",
     )
+    debug_state = {}
 
     fallback = await routes_twilio._handle_realtime_event(
         websocket,
@@ -554,13 +562,16 @@ async def test_realtime_transcript_completed_can_emit_intake_followup(tmp_path) 
         stream_sid="MZ123",
         session_id="twilio_CA_REALTIME_FOLLOWUP",
         call_id="CA_REALTIME_FOLLOWUP",
+        debug_state=debug_state,
     )
+    await asyncio.gather(*debug_state["background_intake_tasks"])
 
     assert fallback is False
-    followup = next(message for message in websocket.sent if message.get("type") == "intake.followup")
-    assert followup["transcript"] == event.text
-    assert followup["missing_fields"]
-    assert followup["source_input_mode"] == "twilio_call"
+    assert not any(message.get("type") == "intake.followup" for message in websocket.sent)
+    state = get_intake_session_store().snapshot("twilio_CA_REALTIME_FOLLOWUP")
+    assert state is not None
+    assert state.conversation_turns[0].text == event.text
+    assert state.collected_fields.missing_fields
 
 
 @pytest.mark.asyncio
@@ -843,6 +854,7 @@ async def test_realtime_transcript_plus_structured_extraction_updates_existing_c
         case_store_path=str(tmp_path / "cases.json"),
     )
     session_id = "twilio_CA_REALTIME_IDEMPOTENT"
+    debug_state = {}
 
     await routes_twilio._handle_realtime_event(
         websocket,
@@ -855,7 +867,9 @@ async def test_realtime_transcript_plus_structured_extraction_updates_existing_c
         stream_sid="MZ123",
         session_id=session_id,
         call_id="CA_REALTIME_IDEMPOTENT",
+        debug_state=debug_state,
     )
+    await asyncio.gather(*debug_state["background_intake_tasks"])
     await routes_twilio._handle_realtime_event(
         websocket,
         settings=settings,
@@ -885,11 +899,13 @@ async def test_realtime_transcript_plus_structured_extraction_updates_existing_c
 
     created = [message for message in websocket.sent if message.get("type") == "triage.case.created"]
     updated = [message for message in websocket.sent if message.get("type") == "case.updated"]
-    assert len(created) == 1
+    assert len(created) == 0
     assert len(updated) == 1
-    assert created[0]["record"]["case"]["case_id"] == updated[0]["record"]["case"]["case_id"]
+    state = get_intake_session_store().snapshot(session_id)
+    assert state is not None
+    assert state.final_case_id == updated[0]["record"]["case"]["case_id"]
     data = json.loads((tmp_path / "cases.json").read_text(encoding="utf-8"))
-    assert list(data) == [created[0]["record"]["case"]["case_id"]]
+    assert list(data) == [state.final_case_id]
 
 
 @pytest.mark.asyncio

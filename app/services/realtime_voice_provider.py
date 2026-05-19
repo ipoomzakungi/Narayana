@@ -246,7 +246,7 @@ def build_realtime_instructions(settings: Settings) -> str:
         "Escalate human review immediately for breathing difficulty, unconsciousness, severe bleeding, "
         "trapped people, active drowning, active fire or smoke, self-harm danger, child risk, "
         "or elderly vulnerable risk. Caller tone is metadata only, not the main triage signal. "
-        "Use the crisis_intake_update tool whenever facts are collected or materially changed."
+        "Do not call tools during the live voice conversation; the backend records case facts asynchronously."
     )
 
 
@@ -326,8 +326,6 @@ def build_openai_realtime_session_update(
             "create_response": True,
             "interrupt_response": True,
         },
-        "tools": [build_realtime_intake_tool()],
-        "tool_choice": "auto",
     }
     if transcription_enabled:
         session["input_audio_transcription"] = {"model": "whisper-1"}
@@ -372,8 +370,6 @@ def _build_openai_realtime_v1_session(
                 "voice": settings.normalized_realtime_output_voice,
             },
         },
-        "tools": [build_realtime_intake_tool()],
-        "tool_choice": "auto",
     }
 
 

@@ -15,7 +15,6 @@ from app.services.realtime_voice_provider import (
     BaseRealtimeProvider,
     WebSocketFactory,
     auth_headers,
-    build_realtime_intake_tool,
     build_voice_live_uri,
 )
 
@@ -42,8 +41,6 @@ class AzureVoiceLiveRealtimeProvider(BaseRealtimeProvider):
                         "input_audio_format": self.settings.effective_realtime_input_audio_format,
                         "output_audio_format": "g711_ulaw",
                         "voice": {"name": self.settings.azure_speech_voice, "type": "azure-standard"},
-                        "tools": [build_realtime_intake_tool()],
-                        "tool_choice": "auto",
                     },
                 }
             )
