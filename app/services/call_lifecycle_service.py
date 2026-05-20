@@ -38,7 +38,11 @@ class CallLifecycleService:
 
     @property
     def enabled(self) -> bool:
-        return self.settings.enable_twilio_initial_greeting or self.settings.enable_twilio_tts_response
+        return (
+            self.settings.enable_twilio_initial_greeting
+            or self.settings.enable_twilio_tts_response
+            or self.settings.enable_realtime_voice
+        )
 
     def track_greeting_sent(self, state: CallLifecycleState, when: datetime | None = None) -> None:
         state.greeting_sent_at = when or utc_now()

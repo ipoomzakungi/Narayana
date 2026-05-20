@@ -291,6 +291,114 @@ def test_twilio_tts_profile_detects_red_and_unclear_payloads() -> None:
 
 
 @pytest.mark.asyncio
+async def test_twilio_hangup_completes_call_when_enabled(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    settings = Settings(
+        twilio_force_hangup_enabled=True,
+        twilio_account_sid="AC123",
+        twilio_auth_token="token",
+        twilio_debug_payloads_enabled=True,
+    )
+    store = get_intake_session_store(settings.assistant_max_followups)
+    store.clear("twilio_CA123")
+    store.get_or_create("twilio_CA123", call_id="CA123", source_input_mode="twilio_call", max_followups=3)
+    completed: list[str] = []
+
+    async def fake_complete_call(settings_arg, call_id: str):
+        completed.append(call_id)
+        return {"status_code": 200}
+
+    monkeypatch.setattr(routes_twilio, "_complete_twilio_call", fake_complete_call)
+    websocket = FakeWebSocket()
+
+    result = await routes_twilio._request_twilio_call_hangup(
+        websocket,
+        settings=settings,
+        session_id="twilio_CA123",
+        call_id="CA123",
+        reason="no_reply",
+        mark_name="narayana_no_reply_close",
+    )
+
+    assert result is True
+    assert completed == ["CA123"]
+    assert websocket.sent[-1]["type"] == "call.hangup.completed"
+
+
+@pytest.mark.asyncio
+async def test_twilio_hangup_skips_when_case_needs_review(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    settings = Settings(
+        twilio_force_hangup_enabled=True,
+        twilio_account_sid="AC123",
+        twilio_auth_token="token",
+        twilio_debug_payloads_enabled=True,
+    )
+    store = get_intake_session_store(settings.assistant_max_followups)
+    store.clear("twilio_CA_REVIEW")
+    state = store.get_or_create("twilio_CA_REVIEW", call_id="CA_REVIEW", source_input_mode="twilio_call", max_followups=3)
+    state.human_review_required = True
+    store.save(state)
+    completed: list[str] = []
+
+    async def fake_complete_call(settings_arg, call_id: str):
+        completed.append(call_id)
+        return {"status_code": 200}
+
+    monkeypatch.setattr(routes_twilio, "_complete_twilio_call", fake_complete_call)
+    websocket = FakeWebSocket()
+
+    result = await routes_twilio._request_twilio_call_hangup(
+        websocket,
+        settings=settings,
+        session_id="twilio_CA_REVIEW",
+        call_id="CA_REVIEW",
+        reason="repeated_off_topic",
+        mark_name="narayana_tts_test",
+    )
+
+    assert result is False
+    assert completed == []
+    assert websocket.sent[-1]["type"] == "call.hangup.skipped"
+    assert websocket.sent[-1]["skip_reason"] == "safety_blocked"
+
+
+@pytest.mark.asyncio
+async def test_twilio_hangup_failure_is_logged_not_raised(monkeypatch) -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    settings = Settings(
+        twilio_force_hangup_enabled=True,
+        twilio_account_sid="AC123",
+        twilio_auth_token="token",
+        twilio_debug_payloads_enabled=True,
+    )
+    store = get_intake_session_store(settings.assistant_max_followups)
+    store.clear("twilio_CA_FAIL")
+    store.get_or_create("twilio_CA_FAIL", call_id="CA_FAIL", source_input_mode="twilio_call", max_followups=3)
+
+    async def fake_complete_call(settings_arg, call_id: str):
+        raise RuntimeError("twilio down")
+
+    monkeypatch.setattr(routes_twilio, "_complete_twilio_call", fake_complete_call)
+    websocket = FakeWebSocket()
+
+    result = await routes_twilio._request_twilio_call_hangup(
+        websocket,
+        settings=settings,
+        session_id="twilio_CA_FAIL",
+        call_id="CA_FAIL",
+        reason="no_reply",
+    )
+
+    assert result is False
+    assert websocket.sent[-1]["type"] == "call.hangup.failed"
+    assert "twilio down" in websocket.sent[-1]["error"]
+
+
+@pytest.mark.asyncio
 async def test_handle_barge_in_sends_twilio_clear(monkeypatch, caplog) -> None:
     import app.api.routes_twilio as routes_twilio
 

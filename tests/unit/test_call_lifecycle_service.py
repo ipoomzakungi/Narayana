@@ -98,3 +98,11 @@ def test_lifecycle_disabled_without_tts_or_greeting() -> None:
     assert service.enabled is False
     assert service.should_prompt_no_reply(state) is False
     assert service.next_timeout_seconds(state) is None
+
+
+def test_realtime_voice_enables_no_reply_lifecycle() -> None:
+    service = CallLifecycleService(Settings(enable_realtime_voice=True, call_no_reply_seconds=1))
+    state = CallLifecycleState(session_id="twilio_CA1", call_id="CA1", greeting_sent_at=utc_now() - timedelta(seconds=2))
+
+    assert service.enabled is True
+    assert service.should_prompt_no_reply(state) is True

@@ -5,6 +5,9 @@ import base64
 import binascii
 from datetime import datetime, timezone
 import logging
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 from urllib.parse import parse_qs
 from xml.sax.saxutils import escape
 
@@ -58,6 +61,8 @@ REALTIME_TRANSCRIPT_DELTA_EVENTS = {
     "transcript.caller.delta",
     "transcript.assistant.delta",
 }
+TWILIO_HANGUP_MARK_TIMEOUT_SECONDS = 3.0
+TWILIO_HANGUP_ALLOWED_REASONS = {"no_reply", "repeated_off_topic"}
 
 
 def _twilio_stream_url(public_base_url: str, call_id: str) -> str:
@@ -310,6 +315,167 @@ def _realtime_event_payload(
 async def _send_twilio_debug_payload(websocket: WebSocket | None, settings, payload: dict) -> None:
     if websocket is not None and settings.twilio_debug_payloads_enabled:
         await websocket.send_json(payload)
+
+
+def _twilio_hangup_credentials_configured(settings) -> bool:
+    return bool(settings.twilio_account_sid and settings.twilio_auth_token)
+
+
+def _state_has_hangup_safety_block(state) -> bool:
+    if state is None:
+        return False
+    if getattr(state, "final_case_id", None):
+        return True
+    if getattr(state, "human_review_required", False):
+        return True
+
+    fields = getattr(state, "collected_fields", None)
+    if fields is not None:
+        if getattr(fields, "incident_type", IncidentType.UNKNOWN) != IncidentType.UNKNOWN:
+            return True
+        if getattr(fields, "injuries", ""):
+            return True
+        if getattr(fields, "immediate_needs", []):
+            return True
+        if getattr(fields, "urgency_signals", []):
+            return True
+
+    guardrail_warnings = set(getattr(state, "guardrail_warnings", []) or [])
+    if any(token in warning for warning in guardrail_warnings for token in ("emergency", "forced_red", "human_review")):
+        return True
+
+    decision_audit = getattr(state, "decision_audit", []) or []
+    for entry in decision_audit:
+        if not isinstance(entry, dict):
+            continue
+        action = str(entry.get("action") or "")
+        if action in {"realtime_transcription_failed", "case_created", "case_updated", "final_case_created"}:
+            return True
+    return False
+
+
+def _twilio_hangup_skip_reason(settings, state, reason: str, call_id: str) -> str:
+    if not settings.twilio_force_hangup_enabled:
+        return "disabled"
+    if reason not in TWILIO_HANGUP_ALLOWED_REASONS:
+        return "unsupported_reason"
+    if not call_id:
+        return "missing_call_id"
+    if not _twilio_hangup_credentials_configured(settings):
+        return "twilio_credentials_missing"
+    if _state_has_hangup_safety_block(state):
+        return "safety_blocked"
+    return ""
+
+
+def _complete_twilio_call_sync(settings, call_id: str) -> dict:
+    account_sid = settings.twilio_account_sid
+    auth_token = settings.twilio_auth_token
+    path_call_id = urllib_parse.quote(call_id, safe="")
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls/{path_call_id}.json"
+    body = urllib_parse.urlencode({"Status": "completed"}).encode("utf-8")
+    request = urllib_request.Request(url, data=body, method="POST")
+    auth = base64.b64encode(f"{account_sid}:{auth_token}".encode("utf-8")).decode("ascii")
+    request.add_header("Authorization", f"Basic {auth}")
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with urllib_request.urlopen(request, timeout=10) as response:
+            response_body = response.read().decode("utf-8", errors="replace")
+            return {"status_code": response.status, "body": response_body[:500]}
+    except urllib_error.HTTPError as exc:
+        response_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"twilio_http_{exc.code}: {response_body[:500]}") from exc
+    except urllib_error.URLError as exc:
+        raise RuntimeError(f"twilio_request_failed: {exc.reason}") from exc
+
+
+async def _complete_twilio_call(settings, call_id: str) -> dict:
+    return await asyncio.to_thread(_complete_twilio_call_sync, settings, call_id)
+
+
+async def _request_twilio_call_hangup(
+    websocket: WebSocket | None,
+    *,
+    settings,
+    session_id: str,
+    call_id: str,
+    reason: str,
+    mark_name: str | None = None,
+) -> bool:
+    store = get_intake_session_store(settings.assistant_max_followups)
+    state = store.snapshot(session_id)
+    metadata = {"reason": reason, "mark_name": mark_name}
+    skip_reason = _twilio_hangup_skip_reason(settings, state, reason, call_id)
+    if skip_reason:
+        log_call_event(
+            logger,
+            "call.hangup.skipped",
+            session_id=session_id,
+            call_id=call_id,
+            metadata={**metadata, "skip_reason": skip_reason},
+            level=logging.WARNING,
+        )
+        append_audit_event(
+            store,
+            settings,
+            session_id,
+            event_type="call.hangup.skipped",
+            metadata={**metadata, "skip_reason": skip_reason},
+        )
+        await _send_twilio_debug_payload(
+            websocket,
+            settings,
+            {"type": "call.hangup.skipped", "session_id": session_id, "call_id": call_id, **metadata, "skip_reason": skip_reason},
+        )
+        return False
+
+    log_call_event(logger, "call.hangup.requested", session_id=session_id, call_id=call_id, metadata=metadata, level=logging.WARNING)
+    append_audit_event(store, settings, session_id, event_type="call.hangup.requested", metadata=metadata)
+    await _send_twilio_debug_payload(
+        websocket,
+        settings,
+        {"type": "call.hangup.requested", "session_id": session_id, "call_id": call_id, **metadata},
+    )
+    try:
+        result = await _complete_twilio_call(settings, call_id)
+    except Exception as exc:
+        log_call_event(
+            logger,
+            "call.hangup.failed",
+            session_id=session_id,
+            call_id=call_id,
+            metadata={**metadata, "error": str(exc)},
+            level=logging.WARNING,
+        )
+        append_audit_event(store, settings, session_id, event_type="call.hangup.failed", metadata={**metadata, "error": str(exc)})
+        await _send_twilio_debug_payload(
+            websocket,
+            settings,
+            {"type": "call.hangup.failed", "session_id": session_id, "call_id": call_id, **metadata, "error": str(exc)},
+        )
+        return False
+
+    log_call_event(
+        logger,
+        "call.hangup.completed",
+        session_id=session_id,
+        call_id=call_id,
+        metadata={**metadata, "status_code": result.get("status_code")},
+        level=logging.WARNING,
+    )
+    append_audit_event(
+        store,
+        settings,
+        session_id,
+        event_type="call.hangup.completed",
+        metadata={**metadata, "status_code": result.get("status_code")},
+    )
+    await _send_twilio_debug_payload(
+        websocket,
+        settings,
+        {"type": "call.hangup.completed", "session_id": session_id, "call_id": call_id, **metadata, "status_code": result.get("status_code")},
+    )
+    return True
 
 
 def _log_realtime(
@@ -1725,17 +1891,17 @@ async def _maybe_send_tts_response(
     session_id: str,
     lifecycle_service: CallLifecycleService | None = None,
     lifecycle_state: CallLifecycleState | None = None,
-) -> None:
+) -> str | None:
     if not settings.enable_twilio_tts_response:
-        return
+        return None
 
     response_text = _payload_response_text(payload)
     if not response_text:
-        return
+        return None
     profile = _tts_profile_for_payload(payload)
     mark_name = f"narayana_tts_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
 
-    await _send_tts_media(
+    sent = await _send_tts_media(
         websocket,
         settings=settings,
         stream_sid=stream_sid,
@@ -1748,6 +1914,7 @@ async def _maybe_send_tts_response(
         lifecycle_service=lifecycle_service,
         lifecycle_state=lifecycle_state,
     )
+    return mark_name if sent else None
 
 
 async def _send_tts_media(
@@ -2011,17 +2178,18 @@ async def _send_no_reply_prompt(
             "response_text": response_text,
             **_scope_debug_fields(state),
         }
-        log_call_event(logger, "call.closed", session_id=session_id, call_id=call_id, metadata={"reason": "no_reply"})
+        log_call_event(logger, "call.end_recommended", session_id=session_id, call_id=call_id, metadata={"reason": "no_reply"})
         append_audit_event(
             store,
             settings,
             session_id,
-            event_type="call.closed",
+            event_type="call.end_recommended",
             speaker=ConversationSpeaker.ASSISTANT,
             text=response_text,
             metadata={"reason": "no_reply"},
         )
         await _send_twilio_debug_payload(websocket, settings, payload)
+        mark_name = "narayana_no_reply_close"
         await _send_tts_media(
             websocket,
             settings=settings,
@@ -2031,12 +2199,11 @@ async def _send_no_reply_prompt(
             call_id=call_id,
             session_id=session_id,
             purpose="call.no_reply_close",
-            mark_name="narayana_no_reply_close",
+            mark_name=mark_name,
             lifecycle_service=lifecycle_service,
             lifecycle_state=lifecycle_state,
         )
-        await websocket.close()
-        return True
+        return mark_name
 
     if lifecycle_service.should_prompt_no_reply(lifecycle_state):
         response_text = lifecycle_service.record_no_reply_prompt(lifecycle_state)
@@ -2077,7 +2244,7 @@ async def _send_no_reply_prompt(
             lifecycle_service=lifecycle_service,
             lifecycle_state=lifecycle_state,
         )
-    return False
+    return None
 
 
 @router.websocket("/ws/telephony/twilio/{call_id}")
@@ -2107,6 +2274,10 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
     realtime_watchdog_task: asyncio.Task | None = None
     realtime_fallback_event = asyncio.Event()
     realtime_debug_state: dict = {}
+    pending_hangup_mark_name: str | None = None
+    pending_hangup_reason: str | None = None
+    pending_hangup_task: asyncio.Task | None = None
+    hangup_requested = False
     processor = AudioSessionProcessor(
         settings=settings,
         session_id=session_id,
@@ -2114,16 +2285,66 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
         call_metadata=metadata,
     )
 
+    async def request_hangup_now(reason: str, mark_name: str | None = None) -> None:
+        nonlocal hangup_requested, pending_hangup_mark_name, pending_hangup_reason, pending_hangup_task
+        if hangup_requested:
+            return
+        hangup_requested = True
+        if pending_hangup_task is not None and not pending_hangup_task.done():
+            pending_hangup_task.cancel()
+        pending_hangup_task = None
+        pending_hangup_mark_name = None
+        pending_hangup_reason = None
+        await _request_twilio_call_hangup(
+            websocket,
+            settings=settings,
+            session_id=session_id,
+            call_id=call_id,
+            reason=reason,
+            mark_name=mark_name,
+        )
+
+    async def schedule_hangup_after_playback(reason: str, mark_name: str | None) -> None:
+        nonlocal pending_hangup_mark_name, pending_hangup_reason, pending_hangup_task
+        if hangup_requested:
+            return
+        pending_hangup_mark_name = mark_name
+        pending_hangup_reason = reason
+        if pending_hangup_task is not None and not pending_hangup_task.done():
+            pending_hangup_task.cancel()
+
+        async def hangup_after_timeout(expected_reason: str, expected_mark_name: str | None) -> None:
+            try:
+                await asyncio.sleep(TWILIO_HANGUP_MARK_TIMEOUT_SECONDS)
+                if pending_hangup_reason == expected_reason and pending_hangup_mark_name == expected_mark_name:
+                    await request_hangup_now(expected_reason, expected_mark_name)
+            except asyncio.CancelledError:
+                return
+
+        pending_hangup_task = asyncio.create_task(hangup_after_timeout(reason, mark_name))
+
+    async def maybe_hangup_after_completed_mark(mark_name: str | None) -> None:
+        store = get_intake_session_store(settings.assistant_max_followups)
+        state = store.snapshot(session_id)
+        if pending_hangup_reason and (pending_hangup_mark_name is None or pending_hangup_mark_name == mark_name):
+            await request_hangup_now(pending_hangup_reason, mark_name)
+            return
+        if state and state.call_end_recommended and state.call_end_reason in TWILIO_HANGUP_ALLOWED_REASONS:
+            await request_hangup_now(state.call_end_reason, mark_name)
+
     try:
         while True:
             try:
-                timeout_seconds = lifecycle_service.next_timeout_seconds(lifecycle_state)
-                if timeout_seconds is None:
+                if pending_hangup_reason:
                     message = await websocket.receive_json()
                 else:
-                    message = await asyncio.wait_for(websocket.receive_json(), timeout=timeout_seconds)
+                    timeout_seconds = lifecycle_service.next_timeout_seconds(lifecycle_state)
+                    if timeout_seconds is None:
+                        message = await websocket.receive_json()
+                    else:
+                        message = await asyncio.wait_for(websocket.receive_json(), timeout=timeout_seconds)
             except asyncio.TimeoutError:
-                should_close = await _send_no_reply_prompt(
+                hangup_mark_name = await _send_no_reply_prompt(
                     websocket,
                     settings=settings,
                     lifecycle_service=lifecycle_service,
@@ -2132,8 +2353,8 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                     call_id=call_id,
                     session_id=session_id,
                 )
-                if should_close:
-                    return
+                if hangup_mark_name:
+                    await schedule_hangup_after_playback("no_reply", hangup_mark_name)
                 continue
             except ValueError as exc:
                 await _send_twilio_debug_payload(
@@ -2362,6 +2583,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                             "mark_name": mark_name,
                         },
                     )
+                    await maybe_hangup_after_completed_mark(mark_name)
                 else:
                     logger.warning(
                         "tts.mark_unmatched session_id=%s call_id=%s streamSid=%s mark_name=%s active_mark_name=%s",
@@ -2514,7 +2736,7 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                 for payload in processed_payloads:
                     payload = _with_tts_debug_metadata(payload, settings, stream_sid)
                     await _send_twilio_debug_payload(websocket, settings, payload)
-                    await _maybe_send_tts_response(
+                    tts_mark_name = await _maybe_send_tts_response(
                         websocket,
                         payload=payload,
                         settings=settings,
@@ -2524,6 +2746,8 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
                         lifecycle_service=lifecycle_service,
                         lifecycle_state=lifecycle_state,
                     )
+                    if payload.get("call_end_recommended") and payload.get("call_end_reason") in TWILIO_HANGUP_ALLOWED_REASONS:
+                        await schedule_hangup_after_playback(str(payload.get("call_end_reason")), tts_mark_name)
                 continue
 
             if event == "stop":
@@ -2580,6 +2804,8 @@ async def twilio_media_ws(websocket: WebSocket, call_id: str) -> None:
         )
         return
     finally:
+        if pending_hangup_task is not None and not pending_hangup_task.done():
+            pending_hangup_task.cancel()
         await _cancel_realtime_receive_task(realtime_watchdog_task)
         await _cancel_realtime_receive_task(realtime_dispatch_task)
         await _cancel_realtime_receive_task(realtime_receive_task)
