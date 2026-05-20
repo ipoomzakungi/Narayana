@@ -48,6 +48,15 @@ def test_low_confidence_requires_review() -> None:
     assert "review.low_confidence" in evaluate_safety_rules(result).matched_rules
 
 
+def test_safety_rules_preserve_existing_human_review_requirement() -> None:
+    case = make_case("operator review required", confidence=0.9)
+    case.human_review_required = True
+
+    result = apply_safety_rules(case)
+
+    assert result.human_review_required is True
+
+
 def test_missing_location_requires_review_and_missing_field() -> None:
     case = make_case("minor property issue")
     case.location_text = ""

@@ -5,6 +5,7 @@ import pytest
 from app.core.config import Settings
 from app.models.intake import ConversationSpeaker, ConversationTurn, IntakeAction, IntakeSessionState
 from app.services.azure_openai_intake_provider import AzureOpenAIIntakeProvider, build_intake_system_prompt
+from app.services.azure_openai_intake_provider import _extract_fields
 from app.services.intake_guardrails import evaluate_intake_guardrails
 
 
@@ -54,3 +55,22 @@ def test_build_intake_system_prompt_contains_scope_and_safety_rules() -> None:
     assert "Do not diagnose" in prompt
     assert "Ask only one question" in prompt
     assert "JSON only" in prompt
+
+
+def test_fallback_location_extractor_does_not_treat_thai_particle_as_location() -> None:
+    fields = _extract_fields("สวัสดี สวัสดีที่รัก", "th")
+
+    assert fields.location_text == ""
+
+
+@pytest.mark.asyncio
+async def test_food_recommendation_is_off_topic_not_case_data() -> None:
+    settings = Settings(use_mock_services=True)
+    provider = AzureOpenAIIntakeProvider(settings)
+    state = IntakeSessionState(session_id="session_food")
+    transcript = "มีอะไรน่าทานบ้างครับ"
+
+    decision = await provider.decide(state, transcript, evaluate_intake_guardrails(transcript, state))
+
+    assert decision.updated_fields.location_text == ""
+    assert decision.updated_fields.incident_type == "unknown"

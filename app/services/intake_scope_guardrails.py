@@ -14,6 +14,19 @@ OFF_TOPIC_FINAL_TEXT = "ขออภัยค่ะ หากไม่มีเ�
 
 OFF_TOPIC_PATTERNS: dict[str, tuple[str, ...]] = {
     "joke_entertainment": ("เล่าเรื่องตลก", "มุกตลก", "joke", "funny", "เพลง", "movie", "เกม"),
+    "food_recommendation": (
+        "อะไรน่าทาน",
+        "อะไรหน้าทาน",
+        "อะไรแน่ทาน",
+        "อะไรน่ากิน",
+        "น่าทานไหม",
+        "หน้าทานไหม",
+        "แน่ทานไหม",
+        "กินอะไรดี",
+        "ร้านอาหาร",
+        "what to eat",
+        "food recommendation",
+    ),
     "weather_news": ("พยากรณ์อากาศ", "ข่าววันนี้", "weather", "news", "forecast"),
     "coding_math": ("เขียนโค้ด", "สอนโค้ด", "coding", "programming", "python", "javascript", "math problem"),
     "finance_politics": ("หุ้น", "คริปโต", "การเมือง", "stock", "crypto", "finance", "politics"),

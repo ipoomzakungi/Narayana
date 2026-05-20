@@ -101,7 +101,7 @@ def apply_safety_rules(case: TriageResult, low_confidence_threshold: float = 0.7
     if result.forced_triage_level:
         updated.triage_level = result.forced_triage_level
 
-    updated.human_review_required = result.human_review_required
+    updated.human_review_required = updated.human_review_required or result.human_review_required
 
     if "review.missing_location" in result.matched_rules and "location_text" not in updated.missing_fields:
         updated.missing_fields.append("location_text")

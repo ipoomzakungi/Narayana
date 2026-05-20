@@ -131,6 +131,7 @@ def test_realtime_instructions_include_crisis_safety_rules() -> None:
     assert "Never reveal RED, YELLOW, or GREEN" in instructions
     assert "Do not diagnose" in instructions
     assert "Do not call tools during the live voice conversation" in instructions
+    assert "Never speak JSON" in instructions
 
 
 def test_openai_realtime_session_update_uses_twilio_compatible_audio_without_tools() -> None:

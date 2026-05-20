@@ -331,7 +331,11 @@ def _extract_location(text: str) -> str:
         if pattern in normalized or pattern in text:
             return location
 
-    match = re.search(r"(?:อยู่ที่|ที่|near|at)\s*([^\s,\.]+(?:\s+[^\s,\.]+)?)", text, flags=re.IGNORECASE)
+    match = re.search(
+        r"(?:อยู่ที่|อยู่แถว|อยู่ใกล้|แถว|ใกล้|near|at)\s*([^\s,\.]+(?:\s+[^\s,\.]+)?)",
+        text,
+        flags=re.IGNORECASE,
+    )
     if match:
         location = match.group(1).strip()
         if location and location not in {"มี", "คน", "ไฟ", "น้ำ"}:

@@ -1110,6 +1110,33 @@ async def test_finalize_realtime_call_summary_creates_case_when_no_case_but_sign
     assert stored["case"]["human_review_required"] is True
 
 
+def test_final_realtime_summary_uses_caller_text_not_assistant_json() -> None:
+    import app.api.routes_twilio as routes_twilio
+
+    summary = routes_twilio._final_summary_from_realtime(
+        realtime_transcript_turns=[
+            {
+                "speaker": "caller",
+                "text": "เจ็บขาอยู่แถวบางพลี",
+                "is_delta": False,
+                "provider": "azure_openai_realtime",
+            },
+            {
+                "speaker": "assistant",
+                "text": '{"facts_extracted":{"incident_type":"บาดเจ็บขา"}}',
+                "is_delta": False,
+                "provider": "azure_openai_realtime",
+            },
+        ],
+        collected_fields=routes_twilio.IntakeCollectedFields(),
+        caller_tone=None,
+        recommended_operator_action=None,
+    )
+
+    assert "เจ็บขาอยู่แถวบางพลี" in summary["ai_summary"]
+    assert "facts_extracted" not in summary["ai_summary"]
+
+
 @pytest.mark.asyncio
 async def test_unknown_realtime_provider_event_is_logged_safely(caplog) -> None:
     import app.api.routes_twilio as routes_twilio

@@ -95,4 +95,42 @@ describe("CasesDashboard", () => {
     await waitFor(() => expect(screen.getByText("Flood with trapped elderly person.")).toBeInTheDocument());
     expect(screen.getByText("mock / session_old")).toBeInTheDocument();
   });
+
+  it("hides structured assistant output and treats unknown human review as review required", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ...snapshot,
+          cases: [
+            {
+              case: {
+                ...redCase,
+                case_id: "case_unknown",
+                triage_level: "YELLOW",
+                incident_type: "unknown",
+                human_review_required: false,
+                ai_summary: '{"facts_extracted":{"location":"bad assistant json"}}',
+                conversation_summary: null,
+                case_group: "unknown_human_review"
+              },
+              session_id: "twilio_CA_UNKNOWN",
+              source_provider: "azure_openai_realtime",
+              debug_event_count: 0,
+              stored_at: "2026-05-03T06:00:02Z",
+              case_group: "unknown_human_review",
+              recommended_team: "human_review",
+              conversation_summary: null
+            }
+          ]
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    render(<CasesDashboard />);
+
+    await waitFor(() => expect(screen.getByText("Needs operator review; no reliable incident summary yet.")).toBeInTheDocument());
+    expect(screen.queryByText("bad assistant json")).not.toBeInTheDocument();
+    expect(screen.getByText("required")).toBeInTheDocument();
+  });
 });

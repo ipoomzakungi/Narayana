@@ -246,7 +246,8 @@ def build_realtime_instructions(settings: Settings) -> str:
         "Escalate human review immediately for breathing difficulty, unconsciousness, severe bleeding, "
         "trapped people, active drowning, active fire or smoke, self-harm danger, child risk, "
         "or elderly vulnerable risk. Caller tone is metadata only, not the main triage signal. "
-        "Do not call tools during the live voice conversation; the backend records case facts asynchronously."
+        "Do not call tools during the live voice conversation; the backend records case facts asynchronously. "
+        "Never speak JSON, XML, code, or structured data to the caller."
     )
 
 

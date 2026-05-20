@@ -37,7 +37,30 @@ function SummaryTile({ label, value, tone }: { label: string; value: number; ton
 }
 
 function intakeSummary(record: CaseRepositoryRecord) {
-  return record.conversation_summary ?? record.case.conversation_summary ?? record.case.ai_summary;
+  const summary = record.conversation_summary ?? record.case.conversation_summary ?? record.case.ai_summary;
+  const group = record.case_group ?? record.case.case_group;
+  if (record.case.incident_type === "unknown" && group === "unknown_human_review") {
+    return "Needs operator review; no reliable incident summary yet.";
+  }
+  if (!summary) return "-";
+  const trimmed = summary.trim();
+  if (trimmed.startsWith("{") || trimmed.includes('"facts_extracted"')) {
+    return "Structured assistant output hidden. Open call audit for transcript.";
+  }
+  return trimmed.length > 260 ? `${trimmed.slice(0, 260)}...` : trimmed;
+}
+
+function reviewRequired(record: CaseRepositoryRecord) {
+  const group = record.case_group ?? record.case.case_group;
+  return record.case.human_review_required || group === "unknown_human_review";
+}
+
+function displayLocation(record: CaseRepositoryRecord) {
+  const group = record.case_group ?? record.case.case_group;
+  if (record.case.incident_type === "unknown" && group === "unknown_human_review") {
+    return "-";
+  }
+  return record.case.location_text || "-";
 }
 
 function CaseRow({ record }: { record: CaseRepositoryRecord }) {
@@ -62,7 +85,7 @@ function CaseRow({ record }: { record: CaseRepositoryRecord }) {
       </div>
       <div>
         <p className="text-xs text-slate-500">Location</p>
-        <p className="mt-1 break-words text-sm font-medium text-slate-800">{record.case.location_text || "-"}</p>
+        <p className="mt-1 break-words text-sm font-medium text-slate-800">{displayLocation(record)}</p>
       </div>
       <div>
         <p className="text-xs text-slate-500">Summary</p>
@@ -77,7 +100,7 @@ function CaseRow({ record }: { record: CaseRepositoryRecord }) {
       </div>
       <div>
         <p className="text-xs text-slate-500">Review</p>
-        <p className="mt-1 text-sm font-semibold text-slate-950">{record.case.human_review_required ? "required" : "not required"}</p>
+        <p className="mt-1 text-sm font-semibold text-slate-950">{reviewRequired(record) ? "required" : "not required"}</p>
         <p className="mt-2 text-xs text-slate-500">{formatDateTime(record.case.created_at)}</p>
       </div>
     </article>

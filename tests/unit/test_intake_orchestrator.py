@@ -49,6 +49,22 @@ async def test_first_off_topic_redirects_without_case(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_food_recommendation_redirects_without_location_or_case(tmp_path) -> None:
+    service = orchestrator(tmp_path)
+
+    response = await service.process_transcript(
+        IntakeRequest(session_id="session_food", transcript="มีอะไรน่าทานบ้างครับ", source_input_mode="manual")
+    )
+
+    assert response.action == IntakeAction.ASK_FOLLOWUP
+    assert response.created_case is None
+    assert response.off_topic_count == 1
+    assert response.partial_state.collected_fields.location_text == ""
+    assert response.call_end_recommended is False
+    assert "scope:off_topic_redirect" in response.guardrail_warnings
+
+
+@pytest.mark.asyncio
 async def test_repeated_off_topic_recommends_call_close(tmp_path) -> None:
     service = orchestrator(tmp_path)
 

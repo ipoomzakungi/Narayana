@@ -1090,6 +1090,15 @@ def _full_realtime_transcript(realtime_transcript_turns: list[dict]) -> str:
     return "\n".join(completed)
 
 
+def _caller_realtime_transcript(realtime_transcript_turns: list[dict]) -> str:
+    caller_turns = [
+        str(turn.get("text", "")).strip()
+        for turn in realtime_transcript_turns
+        if turn.get("speaker") == ConversationSpeaker.CALLER.value and turn.get("text") and not turn.get("is_delta")
+    ]
+    return " | ".join(turn for turn in caller_turns if turn)
+
+
 def _final_summary_from_realtime(
     *,
     realtime_transcript_turns: list[dict],
@@ -1098,6 +1107,7 @@ def _final_summary_from_realtime(
     recommended_operator_action: str | None,
 ) -> dict:
     transcript = _full_realtime_transcript(realtime_transcript_turns)
+    caller_transcript = _caller_realtime_transcript(realtime_transcript_turns)
     facts = []
     if collected_fields.incident_type and collected_fields.incident_type != IncidentType.UNKNOWN:
         facts.append(f"incident_type={collected_fields.incident_type.value}")
@@ -1119,8 +1129,9 @@ def _final_summary_from_realtime(
     action = recommended_operator_action or "operator_review"
     if collected_fields.urgency_signals or collected_fields.injuries:
         action = "immediate_human_review"
+    fallback_summary = caller_transcript[-500:] if caller_transcript else "Realtime call requires operator review."
     return {
-        "ai_summary": "; ".join(facts) or (transcript[-500:] if transcript else "Realtime call requires operator review."),
+        "ai_summary": "; ".join(facts) or fallback_summary,
         "missing_fields": missing_fields,
         "caller_tone": caller_tone or "unknown",
         "recommended_operator_action": action,
