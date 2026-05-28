@@ -37,6 +37,11 @@ These URLs are expected to stop working after resource group deletion.
 
 If the Twilio number is still active, update or disable the Twilio webhook separately to avoid calls pointing at a deleted backend.
 
+## GitHub Actions After Teardown
+
+- `.github/workflows/azure-static-web-apps-ambitious-plant-0ad9a3e00.yml` was disabled by changing it to a manual placeholder workflow. It no longer deploys on push or pull request.
+- `.github/workflows/publish-backend-ghcr.yml` was left enabled. It only builds/pushes the backend image to GitHub Container Registry and does not deploy Azure resources.
+
 ## Recreate Checklist
 
 1. Create a new Azure resource group, usually in `southeastasia`.
